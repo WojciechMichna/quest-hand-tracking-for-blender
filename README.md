@@ -18,6 +18,11 @@ Real-time hand and head tracking from a **Meta Quest 3** streamed over Wi-Fi int
                 └── constraints → your character (Mixamo, custom rig …)
 ```
 
+
+https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
+
+
+
 ## Features
 - 24 joints per hand (wrist + 4 thumb + 5×4 fingers incl. metacarpals) plus head pose.
 - Compact binary protocol (one UDP datagram for both hands); legacy JSON still accepted.
