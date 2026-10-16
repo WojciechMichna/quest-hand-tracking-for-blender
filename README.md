@@ -34,13 +34,13 @@ https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 - Safe to reload the add-on while streaming (state kept in `bpy.app.driver_namespace`).
 
 ## Quick install (prebuilt release)
-Download from the [Releases](../../releases) page:
-`QuestHandTracking_<ver>.apk`, `OculusQuestHandTracking_<ver>.zip`, `QuestHandTracking_<ver>_hands.blend`.
+Download from the [Releases](../../releases) page: `quest-hand-tracking-for-blender.apk` and `OculusQuestHandTracking_<ver>.zip`.
+Hand models: [`blender_models/BothHands.blend`](blender_models/BothHands.blend) from this repo (*Download raw file*).
 
-1. **Quest app** – headset in *Developer Mode* (Meta Horizon phone app → Devices → Developer Mode), USB cable to the PC, then either drag the APK onto **SideQuest**, or run `adb install -r QuestHandTracking_<ver>.apk`.
+1. **Quest app** – headset in *Developer Mode* (Meta Horizon phone app → Devices → Developer Mode), USB cable to the PC, then either drag the APK onto **SideQuest**, or run `adb install -r quest-hand-tracking-for-blender.apk`.
    The app shows up in *Library → Unknown Sources* as **Quest Hand Tracking**.
 2. **Blender add-on** – *Edit → Preferences → Add-ons → ⌄ → Install from Disk…* → pick the `.zip` → enable *Oculus Quest Hand Tracking*.
-3. Open `QuestHandTracking_<ver>_hands.blend`, press **N** in the 3D Viewport → **Quest Hands** tab → set *Right Hand* / *Left Hand* to the two hand armatures → **Start**.
+3. Open `BothHands.blend`, press **N** in the 3D Viewport → **Quest Hands** tab → set *Right Hand* / *Left Hand* to the two hand armatures → **Start**.
    Windows Firewall asks about Blender the first time – allow it on *Private* networks (UDP 5005).
 4. Find your PC IP (`ipconfig` → IPv4 address, e.g. `192.168.1.20`). PC and Quest must be on the same Wi-Fi/LAN.
 5. Start the app on the Quest and put the controllers down – it uses hand tracking.
@@ -59,21 +59,17 @@ No movement? Check: same network, firewall, correct IP, the panel status shows `
 Connect the Quest via USB, open the project in Godot and use *One-click deploy* (Android icon, top right). Blender: open `blender_addon/blender_hand_receiver.py` in the Text Editor → *Run Script* (no install needed).
 
 ### Making a release
+**Blender add-on zip** – version comes from the git tag:
 ```
-git tag v1.7.0                       # the version comes from the tag
-python make_release.py --apk --godot "C:/path/Godot_v4.7-stable_win64.exe"
+git tag v1.7.0
+python make_release.py            # -> releases/OculusQuestHandTracking_v1.7.0.zip
+python make_release.py --strict   # refuse if there are uncommitted changes or HEAD is not on a tag
 ```
-Output in `releases/`:
+**Quest APK** – in Godot: *Project → Export… → Android → Export Project* → save as `releases/quest-hand-tracking-for-blender.apk`.
+With *Export With Debug* ticked it is signed with Godot's debug keystore (fine for sideloading); unticked needs a release keystore in the preset.
+Keep `version/name` in `export_presets.cfg` equal to the tag.
 
-| File | What |
-|---|---|
-| `OculusQuestHandTracking_v1.7.0.zip` | Blender add-on, `bl_info` version set from the tag |
-| `QuestHandTracking_v1.7.0_hands.blend` | copy of `blender_models/BothHands.blend` |
-| `QuestHandTracking_v1.7.0.apk` | Quest app, preset *Android*, debug-signed (`--apk-release` for a release keystore) |
-
-Without `--apk` only the add-on and the .blend are built. `--strict` refuses to build from uncommitted changes or an untagged commit.
-The APK can also be exported by hand: *Project → Export… → Android → Export Project*.
-Keep `version/name` in `export_presets.cfg` equal to the tag – the script warns otherwise.
+Upload both files to a GitHub release for the tag.
 
 ## Add-on panel (Quest Hands tab)
 | Setting | Meaning |
