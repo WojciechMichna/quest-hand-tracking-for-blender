@@ -1,0 +1,84 @@
+[gd_scene load_steps=11 format=3 uid="uid://dvrmainscene01"]
+
+[ext_resource type="Script" path="res://vr_main.gd" id="1_vrmain"]
+[ext_resource type="PackedScene" uid="uid://cleft_model_01" path="res://assets/hands/left_hand_model.tscn" id="2_left_model"]
+[ext_resource type="PackedScene" uid="uid://cright_model_01" path="res://assets/hands/right_hand_model.tscn" id="3_right_model"]
+[ext_resource type="Script" path="res://hand_streamer.gd" id="4_streamer"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky1"]
+sky_top_color = Color(0.18, 0.28, 0.47, 1)
+sky_horizon_color = Color(0.55, 0.62, 0.72, 1)
+ground_bottom_color = Color(0.12, 0.1, 0.08, 1)
+ground_horizon_color = Color(0.35, 0.35, 0.3, 1)
+
+[sub_resource type="Sky" id="Sky_sky1"]
+sky_material = SubResource("ProceduralSkyMaterial_sky1")
+
+[sub_resource type="Environment" id="Environment_env1"]
+background_mode = 2
+sky = SubResource("Sky_sky1")
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+albedo_color = Color(0.25, 0.25, 0.3, 1)
+roughness = 0.85
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(20, 0.05, 20)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_floorcol"]
+size = Vector3(20, 0.05, 20)
+
+[node name="MainVR" type="Node3D"]
+script = ExtResource("1_vrmain")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_env1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0.0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 8, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Floor" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.025, 0)
+
+[node name="FloorMesh" type="MeshInstance3D" parent="Floor"]
+mesh = SubResource("BoxMesh_floor")
+surface_material_override/0 = SubResource("StandardMaterial3D_floor")
+
+[node name="FloorCollision" type="CollisionShape3D" parent="Floor"]
+shape = SubResource("BoxShape3D_floorcol")
+
+[node name="XROrigin3D" type="XROrigin3D" parent="."]
+
+[node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="StatusLabel" type="Label3D" parent="XROrigin3D/XRCamera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, -1.2)
+pixel_size = 0.001
+text = "Initializing VR..."
+font_size = 48
+outline_size = 8
+modulate = Color(1, 1, 1, 0.9)
+
+[node name="LeftHand" type="XRNode3D" parent="XROrigin3D"]
+tracker = &"/user/hand_tracker/left"
+pose = &"default"
+show_when_tracked = true
+
+[node name="LeftHandModel" parent="XROrigin3D/LeftHand" instance=ExtResource("2_left_model")]
+
+[node name="RightHand" type="XRNode3D" parent="XROrigin3D"]
+tracker = &"/user/hand_tracker/right"
+pose = &"default"
+show_when_tracked = true
+
+[node name="RightHandModel" parent="XROrigin3D/RightHand" instance=ExtResource("3_right_model")]
+
+[node name="HandStreamer" type="Node" parent="."]
+script = ExtResource("4_streamer")
+target_ip = "192.168.0.223"
+target_port = 5005
+

@@ -1,0 +1,8 @@
+[gd_scene load_steps=3 format=3 uid="uid://cleft_model_01"]
+
+[ext_resource type="PackedScene" uid="uid://cinvi3wmt3231" path="res://assets/hands/LeftHandHumanoid.gltf" id="1_left_gltf"]
+[ext_resource type="Script" path="res://assets/hands/hand_rig.gd" id="2_hand_rig"]
+
+[node name="LeftHandModel" instance=ExtResource("1_left_gltf")]
+script = ExtResource("2_hand_rig")
+hand_tracker = &"/user/hand_tracker/left"

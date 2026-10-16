@@ -1,0 +1,134 @@
+[gd_scene load_steps=12 format=3 uid="uid://cstartupmenu01"]
+
+[ext_resource type="Script" path="res://menu.gd" id="1_menugd"]
+[ext_resource type="PackedScene" uid="uid://cleft_model_01" path="res://assets/hands/left_hand_model.tscn" id="2_left_model"]
+[ext_resource type="PackedScene" uid="uid://cright_model_01" path="res://assets/hands/right_hand_model.tscn" id="3_right_model"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
+sky_top_color = Color(0.1, 0.12, 0.18, 1)
+sky_horizon_color = Color(0.18, 0.2, 0.26, 1)
+ground_bottom_color = Color(0.05, 0.05, 0.08, 1)
+ground_horizon_color = Color(0.15, 0.15, 0.2, 1)
+
+[sub_resource type="Sky" id="Sky_sky"]
+sky_material = SubResource("ProceduralSkyMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_menu"]
+background_mode = 2
+sky = SubResource("Sky_sky")
+tonemap_mode = 2
+
+[sub_resource type="QuadMesh" id="QuadMesh_panel"]
+size = Vector2(0.65, 0.62)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_panel"]
+albedo_color = Color(0.07, 0.08, 0.12, 0.96)
+roughness = 0.85
+emission_enabled = true
+emission = Color(0.02, 0.03, 0.05, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_reticle"]
+radius = 0.01
+height = 0.02
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_reticle"]
+no_depth_test = true
+shading_mode = 0
+albedo_color = Color(0.1, 0.95, 1, 0.95)
+
+[sub_resource type="QuadMesh" id="QuadMesh_ipbox"]
+size = Vector2(0.42, 0.065)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ipbox"]
+albedo_color = Color(0.03, 0.04, 0.06, 1)
+roughness = 0.9
+
+[node name="MenuVR" type="Node3D"]
+script = ExtResource("1_menugd")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_menu")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 5, 0)
+light_energy = 1.0
+
+[node name="XROrigin3D" type="XROrigin3D" parent="."]
+
+[node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+
+[node name="Panel" type="Node3D" parent="XROrigin3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, -0.55)
+
+[node name="PanelBg" type="MeshInstance3D" parent="XROrigin3D/Panel"]
+mesh = SubResource("QuadMesh_panel")
+surface_material_override/0 = SubResource("StandardMaterial3D_panel")
+
+[node name="IPBoxBg" type="MeshInstance3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.08, 0.004)
+mesh = SubResource("QuadMesh_ipbox")
+surface_material_override/0 = SubResource("StandardMaterial3D_ipbox")
+
+[node name="Reticle" type="MeshInstance3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.02)
+mesh = SubResource("SphereMesh_reticle")
+surface_material_override/0 = SubResource("StandardMaterial3D_reticle")
+
+[node name="TitleLabel" type="Label3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.23, 0.01)
+pixel_size = 0.001
+text = "VR Hand Streamer"
+font_size = 36
+outline_size = 6
+
+[node name="SubtitleLabel" type="Label3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.16, 0.01)
+pixel_size = 0.001
+text = "Target PC IP (UDP Port 5005):"
+font_size = 20
+modulate = Color(0.7, 0.75, 0.85, 1)
+
+[node name="IPValue" type="Label3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.08, 0.01)
+pixel_size = 0.001
+text = "192.168.0.223"
+font_size = 38
+outline_size = 6
+modulate = Color(0.2, 0.88, 1, 1)
+
+[node name="CountdownLabel" type="Label3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0.01)
+pixel_size = 0.001
+text = "Starting in 30s... (Pinch or tap Start)"
+font_size = 18
+modulate = Color(1, 0.85, 0.2, 1)
+
+[node name="StatusLabel" type="Label3D" parent="XROrigin3D/Panel"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.285, 0.01)
+pixel_size = 0.001
+text = "Look & pinch (thumb+index), or touch with finger"
+font_size = 15
+modulate = Color(0.65, 0.85, 0.95, 1)
+
+[node name="LeftController" type="XRController3D" parent="XROrigin3D"]
+tracker = &"left_hand"
+pose = &"aim"
+
+[node name="RightController" type="XRController3D" parent="XROrigin3D"]
+tracker = &"right_hand"
+pose = &"aim"
+
+[node name="LeftHand" type="XRNode3D" parent="XROrigin3D"]
+tracker = &"/user/hand_tracker/left"
+pose = &"default"
+show_when_tracked = true
+
+[node name="LeftHandModel" parent="XROrigin3D/LeftHand" instance=ExtResource("2_left_model")]
+
+[node name="RightHand" type="XRNode3D" parent="XROrigin3D"]
+tracker = &"/user/hand_tracker/right"
+pose = &"default"
+show_when_tracked = true
+
+[node name="RightHandModel" parent="XROrigin3D/RightHand" instance=ExtResource("3_right_model")]

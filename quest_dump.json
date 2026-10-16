@@ -1,0 +1,550 @@
+{
+  "head": {
+    "pos": [
+      -0.1654,
+      1.2136,
+      0.4534
+    ],
+    "rot": [
+      0.0654,
+      0.3728,
+      -0.0026,
+      0.9256
+    ]
+  },
+  "left": {
+    "chains": {
+      "index": [
+        {
+          "length": 0.0474,
+          "name": "IndexMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.0683,
+          "name": "IndexProximal",
+          "rot": [
+            0.1746,
+            0.0373,
+            0.0216,
+            0.9837
+          ]
+        },
+        {
+          "length": 0.0429,
+          "name": "IndexIntermediate",
+          "rot": [
+            0.2427,
+            -0.0263,
+            -0.0007,
+            0.9697
+          ]
+        },
+        {
+          "length": 0.0275,
+          "name": "IndexDistal",
+          "rot": [
+            0.1538,
+            -0.017,
+            -0.0232,
+            0.9877
+          ]
+        },
+        {
+          "length": 0.0253,
+          "name": "IndexTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "little": [
+        {
+          "length": 0.0477,
+          "name": "LittleMetacarpal",
+          "rot": [
+            0.0183,
+            -0.207,
+            -0.1403,
+            0.968
+          ]
+        },
+        {
+          "length": 0.0516,
+          "name": "LittleProximal",
+          "rot": [
+            0.0259,
+            0.0908,
+            -0.023,
+            0.9953
+          ]
+        },
+        {
+          "length": 0.0347,
+          "name": "LittleIntermediate",
+          "rot": [
+            0.1436,
+            -0.051,
+            -0.0364,
+            0.9877
+          ]
+        },
+        {
+          "length": 0.023,
+          "name": "LittleDistal",
+          "rot": [
+            0.0218,
+            0.0008,
+            0.0491,
+            0.9986
+          ]
+        },
+        {
+          "length": 0.0248,
+          "name": "LittleTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "middle": [
+        {
+          "length": 0.039,
+          "name": "MiddleMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.0705,
+          "name": "MiddleProximal",
+          "rot": [
+            0.2065,
+            -0.0181,
+            -0.0614,
+            0.9763
+          ]
+        },
+        {
+          "length": 0.0485,
+          "name": "MiddleIntermediate",
+          "rot": [
+            0.1634,
+            -0.0121,
+            -0.0025,
+            0.9865
+          ]
+        },
+        {
+          "length": 0.0311,
+          "name": "MiddleDistal",
+          "rot": [
+            0.0566,
+            -0.0491,
+            0.0019,
+            0.9972
+          ]
+        },
+        {
+          "length": 0.0283,
+          "name": "MiddleTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "ring": [
+        {
+          "length": 0.0434,
+          "name": "RingMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.061,
+          "name": "RingProximal",
+          "rot": [
+            0.1726,
+            -0.0652,
+            -0.1007,
+            0.9777
+          ]
+        },
+        {
+          "length": 0.0441,
+          "name": "RingIntermediate",
+          "rot": [
+            0.1266,
+            -0.0364,
+            0.0013,
+            0.9913
+          ]
+        },
+        {
+          "length": 0.03,
+          "name": "RingDistal",
+          "rot": [
+            0.0636,
+            -0.0076,
+            0.0295,
+            0.9975
+          ]
+        },
+        {
+          "length": 0.0276,
+          "name": "RingTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "thumb": [
+        {
+          "length": 0.0537,
+          "name": "ThumbMetacarpal",
+          "rot": [
+            -0.1105,
+            0.5267,
+            0.4312,
+            0.7242
+          ]
+        },
+        {
+          "length": 0.0368,
+          "name": "ThumbProximal",
+          "rot": [
+            0.1403,
+            -0.0827,
+            -0.0578,
+            0.985
+          ]
+        },
+        {
+          "length": 0.0382,
+          "name": "ThumbDistal",
+          "rot": [
+            0.1249,
+            0.0788,
+            0.0496,
+            0.9878
+          ]
+        },
+        {
+          "length": 0.0278,
+          "name": "ThumbTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ]
+    },
+    "wrist": {
+      "pos": [
+        -0.4385,
+        0.8183,
+        0.4062
+      ],
+      "rot": [
+        -0.231,
+        0.7952,
+        -0.5232,
+        -0.2015
+      ]
+    }
+  },
+  "right": {
+    "chains": {
+      "index": [
+        {
+          "length": 0.0475,
+          "name": "IndexMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.0644,
+          "name": "IndexProximal",
+          "rot": [
+            0.299,
+            -0.0358,
+            0.014,
+            0.9535
+          ]
+        },
+        {
+          "length": 0.0415,
+          "name": "IndexIntermediate",
+          "rot": [
+            0.2857,
+            0.0262,
+            -0.0005,
+            0.958
+          ]
+        },
+        {
+          "length": 0.0266,
+          "name": "IndexDistal",
+          "rot": [
+            0.1252,
+            0.0169,
+            0.0238,
+            0.9917
+          ]
+        },
+        {
+          "length": 0.0245,
+          "name": "IndexTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "little": [
+        {
+          "length": 0.0462,
+          "name": "LittleMetacarpal",
+          "rot": [
+            0.0183,
+            0.207,
+            0.1403,
+            0.968
+          ]
+        },
+        {
+          "length": 0.05,
+          "name": "LittleProximal",
+          "rot": [
+            0.1987,
+            -0.07,
+            0.0733,
+            0.9748
+          ]
+        },
+        {
+          "length": 0.0336,
+          "name": "LittleIntermediate",
+          "rot": [
+            0.2695,
+            0.061,
+            0.0304,
+            0.9606
+          ]
+        },
+        {
+          "length": 0.0222,
+          "name": "LittleDistal",
+          "rot": [
+            0.0738,
+            -0.001,
+            -0.049,
+            0.9961
+          ]
+        },
+        {
+          "length": 0.024,
+          "name": "LittleTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "middle": [
+        {
+          "length": 0.0402,
+          "name": "MiddleMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.0662,
+          "name": "MiddleProximal",
+          "rot": [
+            0.3084,
+            0.0259,
+            0.0661,
+            0.9486
+          ]
+        },
+        {
+          "length": 0.047,
+          "name": "MiddleIntermediate",
+          "rot": [
+            0.2289,
+            0.0124,
+            0.0017,
+            0.9734
+          ]
+        },
+        {
+          "length": 0.0302,
+          "name": "MiddleDistal",
+          "rot": [
+            0.0658,
+            0.05,
+            -0.0023,
+            0.9966
+          ]
+        },
+        {
+          "length": 0.0274,
+          "name": "MiddleTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "ring": [
+        {
+          "length": 0.042,
+          "name": "RingMetacarpal",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "length": 0.0591,
+          "name": "RingProximal",
+          "rot": [
+            0.2989,
+            0.0814,
+            0.1093,
+            0.9445
+          ]
+        },
+        {
+          "length": 0.0427,
+          "name": "RingIntermediate",
+          "rot": [
+            0.2267,
+            0.0383,
+            -0.0047,
+            0.9732
+          ]
+        },
+        {
+          "length": 0.0291,
+          "name": "RingDistal",
+          "rot": [
+            0.1086,
+            0.0097,
+            -0.0296,
+            0.9936
+          ]
+        },
+        {
+          "length": 0.0267,
+          "name": "RingTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "thumb": [
+        {
+          "length": 0.0547,
+          "name": "ThumbMetacarpal",
+          "rot": [
+            0.0551,
+            -0.6672,
+            -0.3669,
+            0.6459
+          ]
+        },
+        {
+          "length": 0.0356,
+          "name": "ThumbProximal",
+          "rot": [
+            0.2834,
+            0.0804,
+            0.0437,
+            0.9546
+          ]
+        },
+        {
+          "length": 0.037,
+          "name": "ThumbDistal",
+          "rot": [
+            0.0736,
+            -0.0804,
+            -0.0541,
+            0.9926
+          ]
+        },
+        {
+          "length": 0.027,
+          "name": "ThumbTip",
+          "rot": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      ]
+    },
+    "wrist": {
+      "pos": [
+        -0.0795,
+        0.822,
+        0.1134
+      ],
+      "rot": [
+        -0.0288,
+        0.7545,
+        -0.5176,
+        -0.4026
+      ]
+    }
+  },
+  "time": 1859425
+}

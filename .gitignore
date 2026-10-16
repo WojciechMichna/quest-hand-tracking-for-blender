@@ -1,0 +1,43 @@
+# Godot 4+ specific ignores
+.godot/
+
+# Android build artifacts
+android/build/.gradle/
+android/build/build/
+android/build/src/main/assets/
+
+# Logs and temps
+*.log
+*.zip
+scratch/
+
+# Python & recorded dumps
+__pycache__/
+*.py[cod]
+test_venv/
+venv/
+frames/
+packets/
+
+# Blender backups / Windows temp
+*.blend1
+*.TMP
+quest_last_frames.jsonl
+quest_dumps/
+quest_last_frames.jsonl
+
+# Local-only files (not for the public repo)
+blender_hand_receiver_old.py
+blender_models/TransferTest.blend
+releases/
+*.import.bak
+
+# Publishing: generated / third-party / private
+android/
+addons/godotopenxrvendors/
+WhatItIs.md
+.git_backup_old/
+quest_custom_dump.json
+*.png
+*.png.import
+~*

@@ -1,0 +1,8 @@
+[gd_scene load_steps=3 format=3 uid="uid://cright_model_01"]
+
+[ext_resource type="PackedScene" uid="uid://ctuucsg2yf8j4" path="res://assets/hands/RightHandHumanoid.gltf" id="1_right_gltf"]
+[ext_resource type="Script" path="res://assets/hands/hand_rig.gd" id="2_hand_rig"]
+
+[node name="RightHandModel" instance=ExtResource("1_right_gltf")]
+script = ExtResource("2_hand_rig")
+hand_tracker = &"/user/hand_tracker/right"
