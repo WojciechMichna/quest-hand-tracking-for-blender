@@ -42,3 +42,7 @@ quest_custom_dump.json
 *.png
 *.png.import
 ~*
+
+# Signing keys - never commit
+*.keystore
+*.jks
