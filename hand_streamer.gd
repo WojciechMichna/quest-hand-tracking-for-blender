@@ -118,6 +118,41 @@ var _has_new_frame: bool = false
 var _model_rot := {"Left": {}, "Right": {}}    # prefix -> {short_name: Quaternion}
 var _bone_idx := {"Left": {}, "Right": {}}     # prefix -> {short_name: bone index}
 
+# --- Recenter -----------------------------------------------------------------
+# Everything we send (head, wrists) is expressed relative to where the user stood and
+# looked when streaming started: that spot = origin on the floor, view direction = -Z.
+# Without it the origin is wherever the Quest put its floor origin (headset on the desk
+# when the app was launched, a redrawn boundary...).
+## Recenter automatically once the head is tracked after start, and on the system recenter (hold Meta button).
+@export var auto_recenter: bool = true
+var _center: Transform3D = Transform3D.IDENTITY
+var _recenter_pending: bool = true
+var _recenter_delay: float = 0.5     # seconds of valid head tracking before the first recenter
+
+
+## Makes the current headset position (on the floor) + yaw the new origin of the sent data.
+func recenter() -> void:
+	if not xr_camera:
+		return
+	var ht: Transform3D = xr_camera.transform
+	var f: Vector3 = -ht.basis.z
+	f.y = 0.0
+	if f.length_squared() < 1e-6:
+		f = ht.basis.y        # looking straight down/up: use the head's up axis
+		f.y = 0.0
+	if f.length_squared() < 1e-6:
+		return
+	var origin := Vector3(ht.origin.x, 0.0, ht.origin.z)
+	_center = Transform3D(Basis.looking_at(f.normalized(), Vector3.UP), origin).affine_inverse()
+	_recenter_pending = false
+	print("[HandStreamer] Recentered at ", origin)
+
+
+func _on_pose_recentered() -> void:
+	# The Quest moved its own origin; our stored offset is stale -> recenter on the next frame.
+	_recenter_pending = true
+	_recenter_delay = 0.0
+
 
 func _ready() -> void:
 	_load_config()
@@ -133,6 +168,10 @@ func _ready() -> void:
 		right_hand_node = origin.find_child("RightHand", true, false) as XRNode3D
 
 	set_process(true)
+
+	var xri := XRServer.find_interface("OpenXR")
+	if xri and xri.has_signal("pose_recentered"):
+		xri.connect("pose_recentered", _on_pose_recentered)
 
 	if enabled:
 		_running = true
@@ -221,13 +260,18 @@ func _process(_delta: float) -> void:
 	if not left_skeleton or not right_skeleton:
 		_cache_skeletons()
 
+	if auto_recenter and _recenter_pending and xr_camera and xr_camera.transform != Transform3D.IDENTITY:
+		_recenter_delay -= _delta
+		if _recenter_delay <= 0.0:
+			recenter()
+
 	var frame := {
 		"time": Time.get_ticks_msec(),
 	}
 
 	# 1. Head as point in room space
 	if xr_camera:
-		var ht: Transform3D = xr_camera.transform
+		var ht: Transform3D = _center * xr_camera.transform
 		var hq: Quaternion = ht.basis.get_rotation_quaternion()
 		frame["head"] = {
 			"pos": [snappedf(ht.origin.x, 0.0001), snappedf(ht.origin.y, 0.0001), snappedf(ht.origin.z, 0.0001)],
@@ -285,6 +329,7 @@ func _extract_hand(tracker: RefCounted, prefix: String, hand_node: XRNode3D, ske
 	elif hand_node:
 		wt = hand_node.transform
 
+	wt = _center * wt
 	var wq: Quaternion = wt.basis.get_rotation_quaternion()
 	hand_data["wrist"] = {
 		"pos": [snappedf(wt.origin.x, 0.0001), snappedf(wt.origin.y, 0.0001), snappedf(wt.origin.z, 0.0001)],
@@ -344,6 +389,7 @@ func _extract_hand(tracker: RefCounted, prefix: String, hand_node: XRNode3D, ske
 func _extract_hand_fallback(prefix: String, hand_node: XRNode3D, skeleton: Skeleton3D) -> Dictionary:
 	var hand_data := {}
 	var wt: Transform3D = hand_node.transform
+	wt = _center * wt
 	var wq: Quaternion = wt.basis.get_rotation_quaternion()
 	hand_data["wrist"] = {
 		"pos": [snappedf(wt.origin.x, 0.0001), snappedf(wt.origin.y, 0.0001), snappedf(wt.origin.z, 0.0001)],

@@ -100,7 +100,7 @@ modulate = Color(0.2, 0.88, 1, 1)
 [node name="CountdownLabel" type="Label3D" parent="XROrigin3D/Panel"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0.01)
 pixel_size = 0.001
-text = "Starting in 30s... (Pinch or tap Start)"
+text = "Type the PC IP, then tap START NOW."
 font_size = 18
 modulate = Color(1, 0.85, 0.2, 1)
 

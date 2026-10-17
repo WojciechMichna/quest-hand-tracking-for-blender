@@ -44,7 +44,7 @@ Hand models: [`blender_models/BothHands.blend`](blender_models/BothHands.blend) 
    Windows Firewall asks about Blender the first time – allow it on *Private* networks (UDP 5005).
 4. Find your PC IP (`ipconfig` → IPv4 address, e.g. `192.168.1.20`). PC and Quest must be on the same Wi-Fi/LAN.
 5. Start the app on the Quest and put the controllers down – it uses hand tracking.
-   On the floating keypad type the PC IP (touch a key with the index finger or point and pinch), then **START NOW** (or wait for the 30 s countdown). The IP is remembered for next time.
+   On the floating keypad type the PC IP (touch a key with the index finger or point and pinch), then stand where the character should stand, look straight ahead and tap **START NOW**. That spot becomes the origin (holding the Meta button later re-centers it). The IP is remembered for next time.
 6. Move your hands – the Blender hands follow live. **Stop** in the panel ends the stream.
 
 No movement? Check: same network, firewall, correct IP, the panel status shows `pkt/s` instead of `Waiting for packets...`, hand tracking enabled on the Quest (Settings → Movement Tracking → Hand Tracking).
@@ -80,7 +80,8 @@ Upload both files to a GitHub release for the tag.
 | Rig | Auto / Native / Geometric. |
 | Bone length | From Quest / From model. |
 | Inactive hand | Hold (last pose) / Hide / Rest pose. |
-| Head Origin, Hands Origin | Empties that place the Quest space in the scene; empty = world origin. |
+| Head Origin, Hands Origin | Empties that place the Quest space in the scene; empty = world origin. You stand on Head Origin looking along its +Y (rotate it 180° on Z for a character facing −Y, e.g. Mixamo). |
+| Recenter / X | Optional correction from Blender: the current head position becomes the origin. The Quest app already recenters on START and on the Meta-button recenter. X clears it. |
 
 ## Data convention
 Joint rotations come from Godot's `XRHandTracker` (Godot skeleton convention, not raw OpenXR):

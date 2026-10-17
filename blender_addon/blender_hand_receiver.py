@@ -360,8 +360,11 @@ def _update_armature(arm_obj, hand, side, wrist_world, quest_positions=False):
 
     # 2. Bone delta rotations in armature space
     # old APK without the "pos" field -> behave like "From model"
+    # all positions zero (tracker gave orientations only, e.g. controller-driven hand data)
+    # -> also fall back, otherwise every bone collapses onto the wrist
     quest_positions = quest_positions and any(
-        "pos" in info for ch in (hand.get("chains") or {}).values() for info in ch)
+        sum(abs(x) for x in info.get("pos", (0.0, 0.0, 0.0))) > 1e-4
+        for ch in (hand.get("chains") or {}).values() for info in ch)
     delta = {}
     heads = {}       # target bone head positions in armature space (quest_positions mode)
     wrist_head = cal.Fw4_inv.inverted().translation
@@ -438,6 +441,30 @@ def get_targets(scene):
 _last_head_room = {"m": None}
 
 
+def _recenter(scene):
+    """Recenter correction C (stored in the scene): head_world = HeadOrigin * C * head_room.
+    Identity when not set."""
+    v = scene.get("quest_recenter")
+    if v is None or len(v) != 16:
+        return Matrix.Identity(4)
+    return Matrix([list(v[0:4]), list(v[4:8]), list(v[8:12]), list(v[12:16])])
+
+
+def compute_recenter(head_room):
+    """C so that the CURRENT head stands above the origin (x = y = 0, height kept)
+    and looks along +Y of Head Origin - the same convention as the Quest app's own recenter
+    (Quest forward -Z -> Blender +Y). A character facing -Y needs Head Origin rotated 180 deg on Z.
+    Only yaw is used."""
+    import math
+    fwd = head_room.to_3x3() @ Vector((0.0, 0.0, -1.0))
+    if fwd.x * fwd.x + fwd.y * fwd.y < 1e-8:          # looking straight up/down - use the up axis
+        fwd = head_room.to_3x3() @ Vector((0.0, 1.0, 0.0))
+    yaw = math.atan2(fwd.y, fwd.x)
+    R = Matrix.Rotation(math.pi / 2.0 - yaw, 4, 'Z')
+    p = R @ head_room.translation
+    return Matrix.Translation((-p.x, -p.y, 0.0)) @ R
+
+
 def apply_frame(frame, scene=None):
     """Head:  world = HeadOrigin * head_room
     Hands relative to head: world = Head(object, no scale) * head_room^-1 * hand_room
@@ -454,7 +481,7 @@ def apply_frame(frame, scene=None):
 
     head_world = None
     if head_room is not None:
-        head_world = _anchor(t["HeadOrigin"]) @ head_room
+        head_world = _anchor(t["HeadOrigin"]) @ _recenter(scene) @ head_room
         if t["Head"] is not None:
             _update_head(t["Head"], head_world)
 
@@ -465,7 +492,7 @@ def apply_frame(frame, scene=None):
             head_now = _no_scale(t["Head"].matrix_world) if t["Head"] is not None else head_world
             hands_base = head_now @ head_room.inverted()
     else:
-        hands_base = _anchor(t["HandsOrigin"])
+        hands_base = _anchor(t["HandsOrigin"]) @ _recenter(scene)
 
     lost_mode = getattr(scene, "quest_lost_hand", "HOLD")
     for side in SIDES:
@@ -979,6 +1006,33 @@ class QUESTHANDS_OT_toggle_stream(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class QUESTHANDS_OT_recenter(bpy.types.Operator):
+    bl_idname = "questhands.recenter"
+    bl_label = "Recenter"
+    bl_description = ("Treat the current headset position as the origin: you stand above Head Origin "
+                      "(or the world origin) looking along its +Y. The Quest app already recenters on start "
+                      "and on the Meta-button recenter; use this only to correct it from Blender")
+
+    reset: bpy.props.BoolProperty(default=False, options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        sc = context.scene
+        if self.reset:
+            if "quest_recenter" in sc:
+                del sc["quest_recenter"]
+            self.report({'INFO'}, "Quest Hands: recenter cleared")
+        else:
+            H = _last_head_room["m"]
+            if H is None:
+                self.report({'ERROR'}, "No head data yet - press Start and put the headset on")
+                return {'CANCELLED'}
+            C = compute_recenter(H)
+            sc["quest_recenter"] = [C[r][c] for r in range(4) for c in range(4)]
+            self.report({'INFO'}, "Quest Hands: recentered on the current head position")
+        _tag_redraw()
+        return {'FINISHED'}
+
+
 class QUESTHANDS_PT_panel(bpy.types.Panel):
     bl_label = "Quest Hands"
     bl_idname = "QUESTHANDS_PT_panel"
@@ -1016,6 +1070,12 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Reference points (empty = world origin)")
         box.prop(sc, "quest_head_origin", text="Head Origin", icon='EMPTY_AXIS')
+        row = box.row(align=True)
+        row.operator(QUESTHANDS_OT_recenter.bl_idname, text="Recenter", icon='PIVOT_CURSOR')
+        r2 = row.row(align=True)
+        r2.enabled = "quest_recenter" in sc
+        op = r2.operator(QUESTHANDS_OT_recenter.bl_idname, text="", icon='X')
+        op.reset = True
         box.prop(sc, "quest_hands_relative_to_head")
         sub = box.row()
         sub.enabled = not sc.quest_hands_relative_to_head
@@ -1039,7 +1099,7 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
         layout.label(text=f"UDP port: {PORT}")
 
 
-CLASSES = (QUESTHANDS_OT_toggle_stream, QUESTHANDS_PT_panel)
+CLASSES = (QUESTHANDS_OT_toggle_stream, QUESTHANDS_OT_recenter, QUESTHANDS_PT_panel)
 
 
 def _poll_armature(self, obj):

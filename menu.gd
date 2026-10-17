@@ -1,7 +1,7 @@
 extends Node3D
 ## VR Startup Menu on Meta Quest 3.
 ## Initializes OpenXR immediately so headset never drops frames.
-## Persists Server IP in user:// and provides interactive VR controls + auto-start.
+## Persists Server IP in user:// and provides interactive VR controls. Streaming starts only on START NOW.
 
 @onready var xr_origin: XROrigin3D = $XROrigin3D
 @onready var xr_camera: XRCamera3D = $XROrigin3D/XRCamera3D
@@ -22,11 +22,14 @@ const DEFAULT_PORT: int = 5005
 
 const PANEL_HALF_W: float = 0.325
 const PANEL_HALF_H: float = 0.31
+const PANEL_DISTANCE: float = 0.65      # metres in front of the eyes
+const PANEL_REANCHOR_DIST: float = 1.2   # panel further than this (headset was on the desk) -> move it
+const PANEL_REANCHOR_ANGLE: float = 70.0 # or out of view by more than this (degrees)
 
 var current_ip: String = DEFAULT_IP
 var xr_interface: XRInterface = null
 var countdown: float = 30.0
-var auto_start_active: bool = true
+var auto_start_active: bool = false     # no auto-start: user presses START NOW with the headset on
 var is_starting: bool = false
 var panel_positioned: bool = false
 
@@ -209,6 +212,9 @@ func _process(delta: float) -> void:
 		if xr_camera.global_position.length_squared() > 0.001 or xr_camera.global_transform.origin.length_squared() > 0.001:
 			_recenter_panel()
 			panel_positioned = true
+	elif panel_positioned and xr_camera and _panel_lost():
+		# app was started with the headset lying somewhere -> bring the panel in front of the user
+		_recenter_panel()
 
 	# 2. Auto-start countdown
 	if auto_start_active:
@@ -256,11 +262,33 @@ func _recenter_panel() -> void:
 	else:
 		forward = forward.normalized()
 
-	# Place panel 0.52m in front of camera at chest height
-	panel.global_position = cam_pos + forward * 0.52 + Vector3(0, -0.14, 0)
+	# Place panel PANEL_DISTANCE in front of camera, slightly below eye height
+	panel.global_position = cam_pos + forward * PANEL_DISTANCE + Vector3(0, -0.14, 0)
 	panel.look_at(cam_pos + Vector3(0, -0.05, 0), Vector3.UP)
 	panel.rotate_object_local(Vector3.UP, PI)
 	print("[Menu] Anchored panel in world space at: ", panel.global_position)
+
+
+var _out_of_view_time: float = 0.0
+var _user_interacted: bool = false
+
+
+func _panel_lost() -> bool:
+	var to_panel: Vector3 = panel.global_position - xr_camera.global_position
+	if to_panel.length() > PANEL_REANCHOR_DIST:
+		return true
+	# out of view for 1.5 s - only until the user touched the panel (then it stays where it is)
+	if _user_interacted:
+		return false
+	var fwd: Vector3 = -xr_camera.global_transform.basis.z
+	if to_panel.length() > 0.01 and rad_to_deg(fwd.angle_to(to_panel)) > PANEL_REANCHOR_ANGLE:
+		_out_of_view_time += get_process_delta_time()
+	else:
+		_out_of_view_time = 0.0
+	if _out_of_view_time > 1.5:
+		_out_of_view_time = 0.0
+		return true
+	return false
 
 
 func _ensure_skeletons_and_attachments() -> void:
@@ -469,7 +497,8 @@ func _trigger_button(id: String) -> void:
 
 	# Stop countdown as soon as user interacts
 	auto_start_active = false
-	countdown_lbl.text = "Timer paused. Tap START NOW when ready."
+	_user_interacted = true
+	countdown_lbl.text = "Type the PC IP, then tap START NOW."
 
 	if id == "RESET_IP":
 		current_ip = DEFAULT_IP
