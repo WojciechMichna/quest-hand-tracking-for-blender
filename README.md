@@ -22,7 +22,7 @@ Real-time hand, head and full-body tracking from a **Meta Quest 3** streamed ove
 
 ### Body tracking, mirror and recording (v1.9)
 
-<!-- VIDEO 2: drag the new video file here in the GitHub web editor, it becomes a https://github.com/user-attachments/assets/... link -->
+[![Body tracking, mirror and recording](https://img.youtube.com/vi/s0vs6Ofavbo/maxresdefault.jpg)](https://youtu.be/s0vs6Ofavbo)
 
 ### Hand tracking (v1.8)
 
