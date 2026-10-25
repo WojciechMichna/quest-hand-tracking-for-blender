@@ -1,9 +1,10 @@
-[gd_scene load_steps=11 format=3 uid="uid://dvrmainscene01"]
+[gd_scene load_steps=12 format=3 uid="uid://dvrmainscene01"]
 
 [ext_resource type="Script" path="res://vr_main.gd" id="1_vrmain"]
 [ext_resource type="PackedScene" uid="uid://cleft_model_01" path="res://assets/hands/left_hand_model.tscn" id="2_left_model"]
 [ext_resource type="PackedScene" uid="uid://cright_model_01" path="res://assets/hands/right_hand_model.tscn" id="3_right_model"]
 [ext_resource type="Script" path="res://hand_streamer.gd" id="4_streamer"]
+[ext_resource type="PackedScene" path="res://assets/avatar/Avatar.glb" id="5_testkun"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky1"]
 sky_top_color = Color(0.18, 0.28, 0.47, 1)
@@ -82,3 +83,6 @@ script = ExtResource("4_streamer")
 target_ip = "192.168.0.223"
 target_port = 5005
 
+[node name="BodyPreview" type="Node3D" parent="XROrigin3D"]
+
+[node name="Avatar" parent="XROrigin3D/BodyPreview" instance=ExtResource("5_testkun")]

@@ -27,6 +27,11 @@ const PANEL_REANCHOR_DIST: float = 1.2   # panel further than this (headset was 
 const PANEL_REANCHOR_ANGLE: float = 70.0 # or out of view by more than this (degrees)
 
 var current_ip: String = DEFAULT_IP
+## Show the full-body avatar in the headset (Meta body tracking). Off = only the two yellow hands.
+## Body data is streamed to Blender either way.
+var show_avatar: bool = false
+## Mirror with the avatar on the left side in the VR scene.
+var show_mirror: bool = false
 var xr_interface: XRInterface = null
 var countdown: float = 30.0
 var auto_start_active: bool = false     # no auto-start: user presses START NOW with the headset on
@@ -83,6 +88,10 @@ func _load_persistent_settings() -> void:
 			var json: Variant = JSON.parse_string(txt)
 			if json is Dictionary and json.has("target_ip"):
 				current_ip = str(json["target_ip"])
+			if json is Dictionary and json.has("show_avatar"):
+				show_avatar = bool(json["show_avatar"])
+			if json is Dictionary and json.has("show_mirror"):
+				show_mirror = bool(json["show_mirror"])
 			file.close()
 	else:
 		_save_persistent_settings()
@@ -92,7 +101,9 @@ func _save_persistent_settings() -> void:
 	var cfg: Dictionary = {
 		"target_ip": current_ip,
 		"target_port": DEFAULT_PORT,
-		"enable_broadcast": false
+		"enable_broadcast": false,
+		"show_avatar": show_avatar,
+		"show_mirror": show_mirror
 	}
 	var file: FileAccess = FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
 	if file:
@@ -119,8 +130,10 @@ func _setup_keypad() -> void:
 		{"id": "9", "label": "9", "x": 0.05, "y": -0.13, "w": 0.08, "h": 0.05, "type": "num"},
 		{"id": "DEL", "label": "DEL", "x": 0.15, "y": -0.13, "w": 0.08, "h": 0.05, "type": "del"},
 
-		{"id": "RESET_IP", "label": "RESET IP", "x": -0.12, "y": -0.20, "w": 0.16, "h": 0.055, "type": "reset"},
-		{"id": "START_BTN", "label": "START NOW >", "x": 0.12, "y": -0.20, "w": 0.22, "h": 0.055, "type": "start"}
+		{"id": "RESET_IP", "label": "RESET\nIP", "x": -0.235, "y": -0.20, "w": 0.10, "h": 0.055, "type": "reset"},
+		{"id": "AVATAR", "label": "AVATAR\nOFF", "x": -0.115, "y": -0.20, "w": 0.12, "h": 0.055, "type": "toggle"},
+		{"id": "MIRROR", "label": "MIRROR\nOFF", "x": 0.015, "y": -0.20, "w": 0.12, "h": 0.055, "type": "toggle"},
+		{"id": "START_BTN", "label": "START NOW >", "x": 0.18, "y": -0.20, "w": 0.19, "h": 0.055, "type": "start"}
 	]
 
 	var keypad_parent: Node3D = Node3D.new()
@@ -161,6 +174,12 @@ func _setup_keypad() -> void:
 			mat_hov.albedo_color = Color(0.85, 0.25, 0.25)
 			mat_hov.emission_enabled = true
 			mat_hov.emission = Color(0.65, 0.15, 0.15)
+		elif k_type == "toggle":
+			mat_norm.albedo_color = Color(0.30, 0.30, 0.30)
+
+			mat_hov.albedo_color = Color(0.50, 0.50, 0.50)
+			mat_hov.emission_enabled = true
+			mat_hov.emission = Color(0.3, 0.3, 0.3)
 		elif k_type == "reset":
 			mat_norm.albedo_color = Color(0.22, 0.28, 0.40)
 
@@ -178,7 +197,7 @@ func _setup_keypad() -> void:
 
 		var lbl: Label3D = Label3D.new()
 		lbl.text = k_lbl
-		lbl.font_size = 28 if k_type == "num" or k_type == "del" else 22
+		lbl.font_size = 28 if k_type == "num" or k_type == "del" else (16 if "\n" in k_lbl else 22)
 		lbl.pixel_size = 0.001
 		lbl.position = Vector3(0, 0, 0.005)
 		lbl.outline_size = 4
@@ -186,6 +205,10 @@ func _setup_keypad() -> void:
 
 		keypad_parent.add_child(btn_mesh)
 		button_nodes[k_id] = btn_mesh
+		if k_id == "AVATAR":
+			_avatar_label = lbl
+		elif k_id == "MIRROR":
+			_mirror_label = lbl
 		buttons.append({
 			"id": k_id,
 			"pos_2d": Vector2(k_x, k_y),
@@ -196,8 +219,25 @@ func _setup_keypad() -> void:
 		})
 
 
+var _avatar_label: Label3D = null
+var _mirror_label: Label3D = null
+
+
 func _update_ui() -> void:
 	ip_display.text = current_ip
+	_update_avatar_button()
+
+
+func _update_avatar_button() -> void:
+	if _avatar_label:
+		_avatar_label.text = "AVATAR\nON" if show_avatar else "AVATAR\nOFF"
+	if _mirror_label:
+		_mirror_label.text = "MIRROR\nON" if show_mirror else "MIRROR\nOFF"
+	for b in buttons:
+		var on: bool = (str(b["id"]) == "AVATAR" and show_avatar) or (str(b["id"]) == "MIRROR" and show_mirror)
+		if str(b["id"]) in ["AVATAR", "MIRROR"]:
+			var m: StandardMaterial3D = b["mat_norm"]
+			m.albedo_color = Color(0.15, 0.45, 0.70) if on else Color(0.30, 0.30, 0.30)
 
 
 func _process(delta: float) -> void:
@@ -500,7 +540,17 @@ func _trigger_button(id: String) -> void:
 	_user_interacted = true
 	countdown_lbl.text = "Type the PC IP, then tap START NOW."
 
-	if id == "RESET_IP":
+	if id == "MIRROR":
+		show_mirror = not show_mirror
+		_update_avatar_button()
+		_save_persistent_settings()
+		status_lbl.text = "Mirror on the left: %s" % ("on" if show_mirror else "off")
+	elif id == "AVATAR":
+		show_avatar = not show_avatar
+		_update_avatar_button()
+		_save_persistent_settings()
+		status_lbl.text = "Full-body avatar: %s" % ("on" if show_avatar else "off (yellow hands only)")
+	elif id == "RESET_IP":
 		current_ip = DEFAULT_IP
 		_update_ui()
 		status_lbl.text = "Reset IP to default: %s" % DEFAULT_IP

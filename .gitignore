@@ -46,3 +46,10 @@ quest_custom_dump.json
 # Signing keys - never commit
 *.keystore
 *.jks
+.plugin_dl/
+
+# Local only: agent config, raw/old body models
+.agents/
+rest_models_raw_mixamo.blend
+blender_models/BodyAndHands.blend
+blender_models/BodyHumanoid.glb

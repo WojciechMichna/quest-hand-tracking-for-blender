@@ -45,4 +45,5 @@ openxr/extensions/hand_tracking_controller_data_source=true
 openxr/extensions/hand_interaction_profile=true
 shaders/enabled=true
 openxr/extensions/meta/passthrough=true
+openxr/extensions/meta/body_tracking=true
 openxr/default_action_set="godot"

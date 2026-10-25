@@ -133,10 +133,25 @@ QHND_VERSION = 1
 JOINT_ORDER = [(finger.lower(), name) for finger, chain in FINGERS.items() for name in chain]
 
 
+QBDY_MAGIC = b"QBDY"
+QBDY_VERSION = 1
+# body joint order of QBDY v1 (= BODY_JOINTS in hand_streamer.gd, Godot humanoid bone names)
+BODY_JOINTS = ["Hips", "Spine", "Chest", "UpperChest", "Neck", "Head",
+               "LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
+               "RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand",
+               "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "LeftToes",
+               "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"]
+
+
 def decode_packet(data):
-    """bytes -> frame dict (same structure for binary QHND and legacy JSON)."""
+    """bytes -> frame dict (same structure for binary QHND and legacy JSON).
+    A QBDY packet gives {"time": t, "body": {...}, "_body_only": True}."""
     if data[:4] == QHND_MAGIC:
         return _decode_qhnd(data)
+    if data[:4] == QBDY_MAGIC:
+        return _decode_qbdy(data)
+    if data[:4] == QCTL_MAGIC:
+        return _decode_qctl(data)
     if data[:1] == b"{":
         return json.loads(data.decode("utf-8"))
     raise ValueError(f"unknown packet ({len(data)} B, starts with {data[:4]!r})")
@@ -176,6 +191,33 @@ def _decode_qhnd(data):
             chains.setdefault(finger, []).append(e)
         frame[key] = {"wrist": {"pos": list(w[:3]), "rot": list(w[3:])}, "chains": chains}
     return frame
+
+
+QCTL_MAGIC = b"QCTL"
+QCTL_VERSION = 1
+CTRL_NAMES = {1: "record_start", 2: "record_stop"}
+
+
+def _decode_qctl(data):
+    """Control packet from the headset (16 B): "QCTL" u8 ver, u8 cmd, u16 reserved, u32 time, u32 seq."""
+    ver, cmd, _res, t, seq = struct.unpack_from("<BBHII", data, 4)
+    if ver != QCTL_VERSION:
+        raise ValueError(f"unsupported QCTL version {ver} (add-on supports {QCTL_VERSION})")
+    return {"_ctrl": {"cmd": cmd, "name": CTRL_NAMES.get(cmd, f"unknown_{cmd}"), "time": t, "seq": seq}}
+
+
+def _decode_qbdy(data):
+    ver, flags, jc, t = struct.unpack_from("<BBHI", data, 4)
+    if ver != QBDY_VERSION:
+        raise ValueError(f"unsupported QBDY version {ver} (add-on supports {QBDY_VERSION})")
+    if jc != len(BODY_JOINTS):
+        raise ValueError(f"QBDY joint count {jc} != {len(BODY_JOINTS)}")
+    valid, tracked = struct.unpack_from("<II", data, 12)
+    js = struct.unpack_from(f"<{jc * 7}f", data, 20)
+    joints = [{"name": n, "rot": list(js[i * 7:i * 7 + 4]), "pos": list(js[i * 7 + 4:i * 7 + 7])}
+              for i, n in enumerate(BODY_JOINTS)]
+    return {"time": t, "_body_only": True,
+            "body": {"flags": flags, "valid": valid, "tracked": tracked, "joints": joints}}
 
 
 class HandCalibration:
@@ -432,6 +474,7 @@ def get_targets(scene):
         "Right": arm(g("quest_right_hand")),
         "Left": arm(g("quest_left_hand")),
         "Head": _ok(scene, g("quest_head")),
+        "Body": arm(g("quest_body")),
         "HeadOrigin": _ok(scene, g("quest_head_origin")),
         "HandsOrigin": _ok(scene, g("quest_hands_origin")),
         "HandsToHead": bool(g("quest_hands_relative_to_head")),
@@ -494,6 +537,13 @@ def apply_frame(frame, scene=None):
     else:
         hands_base = _anchor(t["HandsOrigin"]) @ _recenter(scene)
 
+    body = frame.get("body")
+    if body and t["Body"] is not None:
+        _update_body(t["Body"], body, _anchor(t["HeadOrigin"]) @ _recenter(scene),
+                     {"Left": frame.get("left"), "Right": frame.get("right")})
+    if frame.get("_body_only"):
+        return
+
     lost_mode = getattr(scene, "quest_lost_hand", "HOLD")
     for side in SIDES:
         obj = t[side]
@@ -509,6 +559,178 @@ def apply_frame(frame, scene=None):
         wrist_world = (hands_base @ _room_matrix(w["pos"], w["rot"])) if (w and hands_base is not None) else None
         _update_armature(obj, hand, side, wrist_world,
                          getattr(scene, "quest_joint_positions", "QUEST") == "QUEST")
+
+
+# ----------------------------------------------------------------- body
+# Rest orientation (armature space, T-pose, character facing -Y) of every bone of Godot's
+# SkeletonProfileHumanoid - the axes in which XRBodyTracker / XRHandTracker report joints.
+# Taken from a model exported by Godot with "rest fixer: overwrite axis". Used to drive rigs
+# whose bones have other axes (Mixamo...): bone = tracked * (PROFILE_REST^-1 * bone_rest).
+_R = 0.70711
+PROFILE_REST = {
+    "Hips": (_R, _R, 0, 0), "Spine": (_R, _R, 0, 0), "Chest": (_R, _R, 0, 0), "UpperChest": (_R, _R, 0, 0),
+    "Neck": (_R, _R, 0, 0), "Head": (_R, _R, 0, 0),
+    "LeftShoulder": (_R, 0, 0, -_R), "LeftUpperArm": (0, -_R, -_R, 0), "LeftLowerArm": (0.5, 0.5, 0.5, -0.5),
+    "LeftHand": (0, -_R, -_R, 0), "LeftUpperLeg": (0, 0, -_R, _R), "LeftLowerLeg": (_R, -_R, 0, 0),
+    "LeftFoot": (0, 0, 0, 1), "LeftToes": (0, -1, 0, 0),
+    "RightShoulder": (_R, 0, 0, _R), "RightUpperArm": (0, -_R, _R, 0), "RightLowerArm": (0.5, 0.5, -0.5, 0.5),
+    "RightHand": (0, -_R, _R, 0), "RightUpperLeg": (0, 0, -_R, _R), "RightLowerLeg": (_R, -_R, 0, 0),
+    "RightFoot": (0, 0, 0, 1), "RightToes": (0, -1, 0, 0),
+}
+for _s, _sg in (("Left", -1), ("Right", 1)):
+    for _p in ("ThumbMetacarpal", "ThumbProximal", "ThumbDistal"):
+        PROFILE_REST[_s + _p] = (0.32506, -0.62796, _sg * 0.32506, _sg * 0.62796)
+    for _f in ("Index", "Middle", "Ring", "Little"):
+        for _p in ("Proximal", "Intermediate", "Distal"):
+            PROFILE_REST[_s + _f + _p] = (0, -_R, _sg * _R, 0)
+
+# Godot humanoid name -> Mixamo name (without "mixamorig:")
+MIXAMO_NAMES = {"Hips": "Hips", "Spine": "Spine", "Chest": "Spine1", "UpperChest": "Spine2",
+                "Neck": "Neck", "Head": "Head"}
+for _s in ("Left", "Right"):
+    MIXAMO_NAMES.update({_s + "Shoulder": _s + "Shoulder", _s + "UpperArm": _s + "Arm",
+                         _s + "LowerArm": _s + "ForeArm", _s + "Hand": _s + "Hand",
+                         _s + "UpperLeg": _s + "UpLeg", _s + "LowerLeg": _s + "Leg",
+                         _s + "Foot": _s + "Foot", _s + "Toes": _s + "ToeBase",
+                         _s + "ThumbMetacarpal": _s + "HandThumb1", _s + "ThumbProximal": _s + "HandThumb2",
+                         _s + "ThumbDistal": _s + "HandThumb3"})
+    for _f, _m in (("Index", "Index"), ("Middle", "Middle"), ("Ring", "Ring"), ("Little", "Pinky")):
+        for _i, _p in enumerate(("Proximal", "Intermediate", "Distal"), 1):
+            MIXAMO_NAMES[_s + _f + _p] = f"{_s}Hand{_m}{_i}"
+
+# bones that keep their rest pose relative to the parent instead of the tracked rotation:
+# Meta's neck joint points forward to the middle of the head -> the avatar's head ended up
+# in front of the body. The Head still gets the tracked world rotation.
+BODY_REST_BONES = {"Neck"}
+
+
+class BodyCalibration:
+    """Humanoid body rig: Godot humanoid names (Hips, LeftUpperArm... e.g. BodyHumanoid.glb from
+    Godot, axes = tracker axes) or Mixamo names (mixamorig:Hips / mixamorig_Hips / any prefix,
+    T-pose; axes corrected with PROFILE_REST)."""
+
+    def __init__(self, arm_obj):
+        bones = arm_obj.data.bones
+        self.ok = False
+        self.kind = None
+        self.bone = {}      # humanoid name -> bone name in this rig
+        self.corr = {}      # bone name -> Quaternion correction (identity for Godot-axis rigs)
+        self.rest, self.rest_inv, self.parent, self.order = {}, {}, {}, []
+        hips = next((b.name for b in bones if b.name.endswith("Hips")), None)
+        if hips is None:
+            print(f"[QuestReceiver] {arm_obj.name}: no '*Hips' bone - not a humanoid body rig")
+            return
+        prefix = hips[:-4]
+        if bones.get(prefix + "LeftUpperArm"):
+            self.kind = "GODOT"
+            names = {n: prefix + n for n in PROFILE_REST}
+        elif bones.get(prefix + "LeftArm") and bones.get(prefix + "LeftUpLeg"):
+            self.kind = "MIXAMO"
+            names = {n: prefix + m for n, m in MIXAMO_NAMES.items()}
+        else:
+            print(f"[QuestReceiver] {arm_obj.name}: unknown humanoid naming (prefix '{prefix}')")
+            return
+        self.bone = {n: b for n, b in names.items() if bones.get(b) is not None}
+        for n, b in self.bone.items():
+            if self.kind == "MIXAMO" and n in PROFILE_REST:
+                pr = Quaternion(PROFILE_REST[n])
+                self.corr[b] = pr.inverted() @ bones[b].matrix_local.to_quaternion()
+            else:
+                self.corr[b] = Quaternion()
+
+        def walk(b):
+            self.order.append(b.name)
+            for c in b.children:
+                walk(c)
+        for b in bones:
+            if b.parent is None:
+                walk(b)
+        for b in bones:
+            self.rest[b.name] = b.matrix_local.copy()
+            self.rest_inv[b.name] = b.matrix_local.inverted()
+            self.parent[b.name] = b.parent.name if b.parent else None
+        self.hips = self.bone.get("Hips")
+        self.ok = True
+        print(f"[QuestReceiver] body rig {arm_obj.name}: {self.kind}, {len(self.bone)} mapped bones")
+
+
+_body_calib = {}
+_body_last_good = {}
+_body_stats = {"tracked": 0, "generated": 0, "flags": 0}
+
+
+def _get_body_calib(arm_obj):
+    c = _body_calib.get(arm_obj.name)
+    if c is None:
+        c = _body_calib[arm_obj.name] = BodyCalibration(arm_obj)
+    return c
+
+
+def _finger_world_rotations(hand, side):
+    """hand frame -> {humanoid finger bone name: world rotation in Godot room space (Quaternion)}"""
+    w = hand.get("wrist")
+    if not w:
+        return {}
+    wrist = _q(w["rot"])
+    out = {}
+    for finger, chain in (hand.get("chains") or {}).items():
+        acc = wrist.copy()
+        for info in chain:
+            acc = acc @ _q(info["rot"])
+            out[side + info.get("name", "")] = acc.copy()
+    return out
+
+
+def _update_body(arm_obj, body, base, hands=None):
+    """base = HeadOrigin * recenter (same space as the head). Each tracked joint gives the world
+    rotation of its bone (plus a per-bone axis correction for non-Godot rigs); only Hips also gets
+    its position - other bones keep the model's bone lengths. Fingers come from the hand tracker
+    (hands = {"Left": hand frame, "Right": ...}). Bones without data follow their parents."""
+    cal = _get_body_calib(arm_obj)
+    if not cal.ok:
+        return
+    valid, tracked = int(body.get("valid", 0)), int(body.get("tracked", 0))
+    _body_stats.update(tracked=bin(valid & tracked).count("1"),
+                       generated=bin(valid & ~tracked).count("1"), flags=int(body.get("flags", 0)))
+    target = {}         # bone name -> (Godot room rotation Quaternion, room position list or None)
+    for i, j in enumerate(body.get("joints") or []):
+        n = j.get("name", "")
+        if (valid >> i) & 1:
+            _body_last_good[n] = j
+        jj = _body_last_good.get(n)
+        b = cal.bone.get(n)
+        if jj is not None and b is not None and n not in BODY_REST_BONES:
+            target[b] = (_q(jj["rot"]), jj["pos"])
+    for side, hand in (hands or {}).items():
+        if hand:
+            for n, q in _finger_world_rotations(hand, side).items():
+                b = cal.bone.get(n)
+                if b is not None:
+                    target[b] = (q, None)
+    if not target:
+        return
+    to_arm = arm_obj.matrix_world.normalized().inverted() @ base
+    live = {}
+    pbones = arm_obj.pose.bones
+    for name in cal.order:
+        rest, par = cal.rest[name], cal.parent[name]
+        attached = (live[par] @ cal.rest_inv[par] @ rest) if par else rest.copy()
+        t = target.get(name)
+        if t is None:
+            live[name] = attached
+            continue
+        q, pos = t
+        M = to_arm @ _room_matrix(pos if (pos is not None and name == cal.hips) else [0, 0, 0],
+                                  [q.x, q.y, q.z, q.w])
+        L = (M.to_quaternion() @ cal.corr[name]).to_matrix().to_4x4()
+        L.translation = M.translation if name == cal.hips else attached.translation
+        live[name] = L
+        pb = pbones.get(name)
+        if pb is not None:
+            basis = attached.inverted() @ L
+            pb.rotation_mode = 'QUATERNION'
+            pb.rotation_quaternion = basis.to_quaternion()
+            pb.location = basis.to_translation()
 
 
 _last_good = {"Right": {}, "Left": {}}      # side -> {joint name: last valid entry}
@@ -669,6 +891,11 @@ class HandReceiverThread(threading.Thread):
         self.lock = threading.Lock()
         self.latest_frame = None
         self.has_new_frame = False
+        self.latest_body = None          # from separate QBDY packets
+        self.has_new_body = False
+        self.body_packets = 0
+        self.last_ctrl_seq = None         # QCTL packets come 3x with the same seq
+        self.ctrl_events = collections.deque(maxlen=100)
         self.packets = 0
         self.bad_packets = 0
         self.last_error = ""
@@ -695,9 +922,22 @@ class HandReceiverThread(threading.Thread):
                 self.bad_packets += 1
                 self.last_error = str(e)
                 continue
+            if "_ctrl" in pkt:
+                c = pkt["_ctrl"]
+                if c["seq"] != self.last_ctrl_seq:
+                    self.last_ctrl_seq = c["seq"]
+                    self.ctrl_events.append((time.time(), c))
+                    print(f"[QuestReceiver] CTRL {c['name']} (cmd {c['cmd']}, seq {c['seq']}, quest time {c['time']} ms)")
+                continue
+            self.history.append((time.time(), pkt))
+            if pkt.get("_body_only"):
+                with self.lock:
+                    self.latest_body = pkt["body"]
+                    self.has_new_body = True
+                    self.body_packets += 1
+                continue
             self.last_format = "QHND" if data[:4] == QHND_MAGIC else "JSON"
             self.last_size = len(data)
-            self.history.append((time.time(), pkt))
             with self.lock:
                 self.latest_frame = pkt
                 self.has_new_frame = True
@@ -723,11 +963,18 @@ class HandReceiverThread(threading.Thread):
             self.join(timeout=timeout)
 
     def get_latest_frame(self):
+        """Newest hand/head frame; the newest body (QBDY) is attached as frame["body"]."""
         with self.lock:
-            if not self.has_new_frame:
+            if not (self.has_new_frame or self.has_new_body):
                 return None
+            frame = dict(self.latest_frame or {})
+            if self.latest_body is not None and "body" not in frame:
+                frame["body"] = self.latest_body
+            if not self.has_new_frame:
+                frame["_body_only"] = True     # hands/head unchanged - only the body is new
             self.has_new_frame = False
-            return self.latest_frame
+            self.has_new_body = False
+            return frame
 
 
 def _flex_deg(chain, i):
@@ -774,6 +1021,10 @@ def _make_timer():
             f = th.latest_frame or {}
             hands = "+".join(h for h in ("left", "right") if h in f) or "none"
             st["status"] = f"{fps:.0f} pkt/s | {th.last_format} {th.last_size} B | hands: {hands}"
+            if th.body_packets:
+                st["status"] += (f" | body: {_body_stats['tracked']} tracked, {_body_stats['generated']} generated"
+                                 + (" (legs)" if _body_stats["flags"] & 1 else "")
+                                 + (" HIGH" if _body_stats["flags"] & 2 else ""))
             if th.bad_packets:
                 st["status"] += f" | bad: {th.bad_packets}"
                 print(f"[QuestReceiver] bad packets: {th.bad_packets} (last error: {th.last_error})")
@@ -810,8 +1061,13 @@ def start_stream(scene=None):
     scene = scene or bpy.context.scene
     stop_stream()
     hands = find_hand_armatures(scene)
-    if not hands:
-        return "Pick a Right Hand and/or Left Hand armature (the object must be in the scene)"
+    body = get_targets(scene)["Body"]
+    if not hands and body is None:
+        return "Pick a Body armature and/or a Right/Left Hand armature (the object must be in the scene)"
+    if body is not None and body in hands.values():
+        return f"{body.name} is set as Body and as a Hand - use it only as Body (its fingers follow the hands)"
+    if body is not None and not BodyCalibration(body).ok:
+        return f"{body.name}: not a humanoid body rig (needs Godot humanoid or Mixamo bone names)"
     if len(hands) == 2 and hands["Right"] == hands["Left"]:
         return "Right Hand and Left Hand are the same armature - pick two different ones"
     for side, obj in hands.items():
@@ -825,6 +1081,8 @@ def start_stream(scene=None):
         return f"UDP port {PORT} is busy ({e}). Close the other receiver."
     sock.settimeout(0.5)
     _calib.clear()
+    _body_calib.clear()
+    _body_last_good.clear()
     _last_head_room["m"] = None
     _reset_hand_state()
     st0 = _state()
@@ -1056,6 +1314,7 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
         col.prop(sc, "quest_right_hand", text="Right Hand", icon='ARMATURE_DATA')
         col.prop(sc, "quest_left_hand", text="Left Hand", icon='ARMATURE_DATA')
         col.prop(sc, "quest_head", text="Head", icon='OBJECT_DATA')
+        col.prop(sc, "quest_body", text="Body", icon='OUTLINER_OB_ARMATURE')
         layout.prop(sc, "quest_rig_mode", expand=True)
         layout.label(text="Bone length:")
         layout.prop(sc, "quest_joint_positions", expand=True)
@@ -1108,7 +1367,13 @@ def _poll_armature(self, obj):
 
 def _poll_anchor(scene, obj):
     # an anchor cannot be an object we drive ourselves (loop)
-    return obj not in {scene.quest_right_hand, scene.quest_left_hand, scene.quest_head}
+    return obj not in {scene.quest_right_hand, scene.quest_left_hand, scene.quest_head,
+                       getattr(scene, "quest_body", None)}
+
+
+def _on_body_change(self, context):
+    _body_calib.clear()
+    _body_last_good.clear()
 
 
 def _on_target_change(self, context):
@@ -1146,13 +1411,17 @@ def _register_props():
     S.quest_hands_origin = bpy.props.PointerProperty(
         name="Hands Origin", type=bpy.types.Object, poll=_poll_anchor,
         description="Origin of the Quest space for the hands (object location + rotation). Empty = world origin")
+    S.quest_body = bpy.props.PointerProperty(
+        name="Body", type=bpy.types.Object, poll=_poll_armature, update=_on_body_change,
+        description="Humanoid armature (Godot humanoid bone names: Hips, Spine, LeftUpperArm...) "
+                    "driven by Meta body tracking, e.g. BodyHumanoid.blend")
     S.quest_head = bpy.props.PointerProperty(
         name="Head", type=bpy.types.Object,
         description="Any object (Empty, Camera...) - gets headset position and rotation; object -Z = view direction")
 
 
 def _unregister_props():
-    for name in ("quest_right_hand", "quest_left_hand", "quest_head", "quest_rig_mode", "quest_joint_positions",
+    for name in ("quest_right_hand", "quest_left_hand", "quest_head", "quest_body", "quest_rig_mode", "quest_joint_positions",
                  "quest_lost_hand",
                  "quest_head_origin", "quest_hands_origin", "quest_hands_relative_to_head"):
         if hasattr(bpy.types.Scene, name):
