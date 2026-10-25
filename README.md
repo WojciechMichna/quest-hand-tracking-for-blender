@@ -1,9 +1,9 @@
-# Quest 3 Hand Tracking → Blender (live)
+# Quest Body and Hands Tracking → Blender (live)
 
-Real-time hand, head and body tracking from a **Meta Quest 3** streamed over Wi-Fi into **Blender**, where it drives hand armatures and a full humanoid character (Godot humanoid or Mixamo bone names).
+Real-time hand, head and full-body tracking from a **Meta Quest 3** streamed over Wi-Fi into **Blender**, where it drives hand armatures and a full humanoid character (Godot humanoid or Mixamo bone names). Standalone headset only: no PC VR, no Quest Link, no suit or markers. Takes are recorded from the headset and baked into Blender actions.
 
 - **Quest side:** a small Godot 4.7 OpenXR app (`hand_streamer.gd`) reads `XRHandTracker` and Meta body tracking (`XRBodyTracker`) every frame and sends them over UDP. Optional in-headset full-body avatar, a mirror and record buttons.
-- **PC side:** a Blender add-on, *Quest Body and Hands Tracking* (`blender_addon/blender_hand_receiver.py`), receives the packets on a background thread and poses the bones on the main thread.
+- **PC side:** a Blender add-on, *Quest Body and Hands Tracking* (`blender_addon/blender_hand_receiver.py`), receives the packets on a background thread, poses the bones on the main thread, records takes and bakes them into actions.
 - **Retarget helpers:** scripts in `blender_scripts/` connect the tracked hands to a Mixamo character (fingers, wrist, arm IK with elbow pole, thumbs).
 
 > Polish documentation with more internals: [README.pl.md](README.pl.md)
@@ -13,12 +13,18 @@ Real-time hand, head and body tracking from a **Meta Quest 3** streamed over Wi-
         │  UDP :5005: QHND v1 hands+head (~1.4 KB) + QBDY v1 body (636 B) per frame, 60–90 Hz
         │            QCTL v1 control (record start/stop)
         ▼
-[ Blender 4.x / 5.x – "Quest Hands" add-on ]
-        ├── receiver thread (socket, decode)
-        └── bpy.app.timers (main thread) → pose bones of the hand armatures
-                └── constraints → your character (Mixamo, custom rig …)
+[ Blender 4.x / 5.x – "Quest Body and Hands Tracking" add-on ]
+        ├── receiver thread (socket, decode, record takes → quest_takes/*.qrec)
+        ├── bpy.app.timers (main thread) → pose bones: Body rig, hand armatures, Head object
+        │       └── (optional) constraints → your character (custom rig …)
+        └── Bake Take → action "Take_…" (scene fps, optional smoothing)
 ```
 
+### Body tracking, mirror and recording (v1.9)
+
+<!-- VIDEO 2: drag the new video file here in the GitHub web editor, it becomes a https://github.com/user-attachments/assets/... link -->
+
+### Hand tracking (v1.8)
 
 https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 
@@ -29,6 +35,8 @@ https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 - Meta body tracking: 22 body joints (hips, spine, neck, head, shoulders, arms, legs, toes). Upper body is tracked by the headset cameras, legs are Meta's *Generative Legs* (estimated) – the packet marks which joints are really tracked.
 - Blender **Body** field: drives a whole humanoid rig – bones named like Godot's humanoid profile (`Hips`, `LeftUpperArm`…) or **Mixamo** (`mixamorig:Hips`…, T-pose; bone axes are corrected automatically). Fingers come from hand tracking.
 - In the headset (menu toggles, saved): **AVATAR** – see yourself as a full-body avatar instead of the yellow hands; **MIRROR** – a mirror 1 m to your left. Two **Record Start / Stop** touch buttons in front of you record takes in Blender (3 s countdown to get into the pose).
+- **Recording takes**: Record buttons in the headset (3 s countdown) or in the panel; raw packets saved to `quest_takes/`, baked into a new action at the scene frame rate, optional zero-phase smoothing, re-bake any take later. See *Recording takes*.
+- **Prepare Mixamo Body**: one click makes an imported Mixamo FBX ready for the Body field (T-pose as rest, importer rotation/scale applied, optional height). **Straighten head** fixes a head pushed forward by the rig.
 - Compact binary protocol (one UDP datagram for both hands); legacy JSON still accepted.
 - Works with one hand, two hands or none: inactive hand **Hold / Hide / Rest**.
 - Rig modes: **Native** (bone axes match the data) or **Geometric** (any rig, axes computed from bone directions), **Auto** picks one.

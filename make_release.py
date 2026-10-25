@@ -9,7 +9,8 @@ so in Blender: Edit > Preferences > Add-ons > Install from Disk > pick the zip.
 Version: from the git tag (`git describe --tags`).
   * HEAD exactly on a tag      -> v1.4.0          (bl_info "version" = (1, 4, 0))
   * commits after the tag      -> v1.4.0-3-gabc123
-  * uncommitted changes        -> ...-dirty (warning; --strict aborts)
+  * uncommitted changes in the add-on source -> ...-dirty (warning; --strict aborts);
+    other uncommitted files are ignored
 
 Usage:
     python make_release.py            # build
@@ -40,7 +41,10 @@ def git(*args):
 def get_version():
     try:
         tag = git("describe", "--tags", "--abbrev=0")
-        full = git("describe", "--tags", "--dirty")
+        full = git("describe", "--tags")
+        # only the add-on source goes into the zip - other uncommitted files (.blend...) do not matter
+        if git("status", "--porcelain", "--", os.path.relpath(SOURCE, ROOT)):
+            full += "-dirty"
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         sys.exit(f"[release] git not found or no tags in the repo: {e}")
     m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", tag)
@@ -70,7 +74,8 @@ def main():
     tag, full, nums = get_version()
     exact = (full == tag)
     if not exact:
-        msg = f"[release] WARNING: '{full}' - HEAD is not exactly on tag '{tag}' or there are uncommitted changes."
+        msg = (f"[release] WARNING: '{full}' - HEAD is not exactly on tag '{tag}' or "
+               f"blender_addon/blender_hand_receiver.py has uncommitted changes.")
         if args.strict:
             sys.exit(msg + " (--strict)")
         print(msg)
