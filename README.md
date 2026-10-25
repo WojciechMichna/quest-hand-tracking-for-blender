@@ -37,7 +37,7 @@ https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 - In the headset (menu toggles, saved): **AVATAR** – see yourself as a full-body avatar instead of the yellow hands; **MIRROR** – a mirror 1 m to your left. Two **Record Start / Stop** touch buttons in front of you record takes in Blender (3 s countdown to get into the pose).
 - **Recording takes**: Record buttons in the headset (3 s countdown) or in the panel; raw packets saved to `quest_takes/`, baked into a new action at the scene frame rate, optional zero-phase smoothing, re-bake any take later. See *Recording takes*.
 - **Prepare Mixamo Body**: one click makes an imported Mixamo FBX ready for the Body field (T-pose as rest, importer rotation/scale applied, optional height). **Straighten head** fixes a head pushed forward by the rig.
-- Compact binary protocol (one UDP datagram for both hands); legacy JSON still accepted.
+- Compact binary protocol (one UDP datagram for both hands). The headset builds the packets straight into packed float arrays in the wire layout (about 90 µs per frame on desktop CPU for hands + body, 3.5× less than before), a worker thread sends them. The add-on still accepts the old JSON packets.
 - Works with one hand, two hands or none: inactive hand **Hold / Hide / Rest**.
 - Rig modes: **Native** (bone axes match the data) or **Geometric** (any rig, axes computed from bone directions), **Auto** picks one.
 - Bone length **From Quest** (uses the measured joint positions – your real hand size) or **From model** (keeps the model proportions).
