@@ -53,3 +53,5 @@ quest_custom_dump.json
 rest_models_raw_mixamo.blend
 blender_models/BodyAndHands.blend
 blender_models/BodyHumanoid.glb
+quest_takes/
+*.qrec

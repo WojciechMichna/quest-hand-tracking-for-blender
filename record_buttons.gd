@@ -4,6 +4,8 @@ class_name RecordButtons
 ## (like the mirror) where the user stands and looks when the VR scene starts; they stay there.
 ## Touching either with an index fingertip
 ## toggles recording: "Record Start" <-> "Record Stop" and sends a QCTL packet to the PC.
+## Start begins with a COUNTDOWN_SEC countdown (time to get into the pose) shown in front of the eyes,
+## then QCTL record_start is sent and "REC m:ss" stays in view until Stop (sent immediately).
 ## After a trigger, touches are ignored for DEBOUNCE_SEC (finger resting on the button / jitter).
 
 const DEBOUNCE_SEC := 5.0
@@ -12,10 +14,14 @@ const TOUCH_RADIUS := 0.06          # fingertip distance to the button centre (m
 const OFFSET_UP := 0.20             # above the eyes
 const OFFSET_SIDE := 0.30           # to the left / right
 const OFFSET_FWD := 0.45            # in front (arm's reach)
+const COUNTDOWN_SEC := 3.0
 
 var streamer: HandStreamer = null
 var camera: XRCamera3D = null
-var recording: bool = false
+var recording: bool = false        # true from the touch (countdown included) until Stop
+var _countdown: float = 0.0         # > 0: counting down, record_start not sent yet
+var _rec_time: float = 0.0
+var _hud: Label3D = null            # countdown / REC indicator, fixed in front of the eyes
 var _cooldown: float = 0.0
 var _buttons: Array = []            # [{node, label, mat, side}]
 var _placed: bool = false
@@ -41,12 +47,27 @@ func _ready() -> void:
 		lbl.position = Vector3(0, 0, BUTTON_SIZE.z * 0.5 + 0.002)
 		root.add_child(lbl)
 		_buttons.append({"node": root, "label": lbl, "mat": mat, "side": side})
+	_hud = Label3D.new()
+	_hud.name = "RecordHud"
+	_hud.no_depth_test = true
+	_hud.render_priority = 10
+	_hud.font_size = 96
+	_hud.pixel_size = 0.0008
+	_hud.outline_size = 12
+	_hud.visible = false
+	if camera:
+		camera.add_child(_hud)
+	else:
+		add_child(_hud)
 	_refresh()
 
 
 func _refresh() -> void:
 	for b in _buttons:
-		b["label"].text = "Record Stop" if recording else "Record Start"
+		if _countdown > 0.0:
+			b["label"].text = "Get ready %d" % ceili(_countdown)
+		else:
+			b["label"].text = "Record Stop" if recording else "Record Start"
 		var c: Color = Color(0.85, 0.15, 0.15) if recording else Color(0.15, 0.55, 0.25)
 		if _cooldown > 0.0:
 			c = c.darkened(0.45)
@@ -65,9 +86,42 @@ func _fingertips() -> Array:
 	return tips
 
 
+func _update_hud(delta: float) -> void:
+	if _countdown > 0.0:
+		var before := ceili(_countdown)
+		_countdown -= delta
+		if _countdown <= 0.0:
+			_countdown = 0.0
+			_rec_time = 0.0
+			if streamer:
+				streamer.send_control(HandStreamer.CTRL_RECORD_START)
+			print("[VR] Record START")
+			_refresh()
+		elif ceili(_countdown) != before:
+			_refresh()
+	elif recording:
+		_rec_time += delta
+	if _countdown > 0.0:
+		_hud.visible = true
+		_hud.text = str(ceili(_countdown))
+		_hud.modulate = Color(1.0, 0.75, 0.2)
+		_hud.font_size = 160
+		_hud.position = Vector3(0, 0, -0.6)
+	elif recording:
+		_hud.visible = true
+		var sec := int(_rec_time)
+		_hud.text = "REC %d:%02d" % [int(sec / 60.0), sec % 60]
+		_hud.modulate = Color(1.0, 0.2, 0.2)
+		_hud.font_size = 48
+		_hud.position = Vector3(0, 0.17, -0.6)
+	else:
+		_hud.visible = false
+
+
 func _process(delta: float) -> void:
 	if camera == null:
 		return
+	_update_hud(delta)
 	if not _placed:
 		place()
 		if not _placed:
@@ -108,7 +162,13 @@ func place() -> void:
 func _toggle() -> void:
 	recording = not recording
 	_cooldown = DEBOUNCE_SEC
-	if streamer:
-		streamer.send_control(HandStreamer.CTRL_RECORD_START if recording else HandStreamer.CTRL_RECORD_STOP)
-	print("[VR] Record ", "START" if recording else "STOP")
+	if recording:
+		_countdown = COUNTDOWN_SEC          # record_start is sent when it reaches 0 (_update_hud)
+		print("[VR] Record countdown")
+	else:
+		var started := _countdown <= 0.0
+		_countdown = 0.0
+		if started and streamer:
+			streamer.send_control(HandStreamer.CTRL_RECORD_STOP)
+		print("[VR] Record STOP" if started else "[VR] Record cancelled during countdown")
 	_refresh()

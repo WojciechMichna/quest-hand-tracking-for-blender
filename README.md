@@ -3,7 +3,7 @@
 Real-time hand, head and body tracking from a **Meta Quest 3** streamed over Wi-Fi into **Blender**, where it drives hand armatures and a full humanoid character (Godot humanoid or Mixamo bone names).
 
 - **Quest side:** a small Godot 4.7 OpenXR app (`hand_streamer.gd`) reads `XRHandTracker` and Meta body tracking (`XRBodyTracker`) every frame and sends them over UDP. Optional in-headset full-body avatar, a mirror and record buttons.
-- **PC side:** a Blender add-on, *Oculus Quest Hand Tracking* (`blender_addon/blender_hand_receiver.py`), receives the packets on a background thread and poses the bones on the main thread.
+- **PC side:** a Blender add-on, *Quest Body and Hands Tracking* (`blender_addon/blender_hand_receiver.py`), receives the packets on a background thread and poses the bones on the main thread.
 - **Retarget helpers:** scripts in `blender_scripts/` connect the tracked hands to a Mixamo character (fingers, wrist, arm IK with elbow pole, thumbs).
 
 > Polish documentation with more internals: [README.pl.md](README.pl.md)
@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 - 24 joints per hand (wrist + 4 thumb + 5×4 fingers incl. metacarpals) plus head pose.
 - Meta body tracking: 22 body joints (hips, spine, neck, head, shoulders, arms, legs, toes). Upper body is tracked by the headset cameras, legs are Meta's *Generative Legs* (estimated) – the packet marks which joints are really tracked.
 - Blender **Body** field: drives a whole humanoid rig – bones named like Godot's humanoid profile (`Hips`, `LeftUpperArm`…) or **Mixamo** (`mixamorig:Hips`…, T-pose; bone axes are corrected automatically). Fingers come from hand tracking.
-- In the headset (menu toggles, saved): **AVATAR** – see yourself as a full-body avatar instead of the yellow hands; **MIRROR** – a mirror 1 m to your left. Two **Record Start / Stop** touch buttons in front of you send a control packet to Blender.
+- In the headset (menu toggles, saved): **AVATAR** – see yourself as a full-body avatar instead of the yellow hands; **MIRROR** – a mirror 1 m to your left. Two **Record Start / Stop** touch buttons in front of you record takes in Blender (3 s countdown to get into the pose).
 - Compact binary protocol (one UDP datagram for both hands); legacy JSON still accepted.
 - Works with one hand, two hands or none: inactive hand **Hold / Hide / Rest**.
 - Rig modes: **Native** (bone axes match the data) or **Geometric** (any rig, axes computed from bone directions), **Auto** picks one.
@@ -38,12 +38,12 @@ https://github.com/user-attachments/assets/4041eba9-8743-418c-8f3a-bcb3abac1399
 - Safe to reload the add-on while streaming (state kept in `bpy.app.driver_namespace`).
 
 ## Quick install (prebuilt release)
-Download from the [Releases](../../releases) page: `quest-hand-tracking-for-blender.apk` and `OculusQuestHandTracking_<ver>.zip`.
+Download from the [Releases](../../releases) page: `quest-body-and-hands-tracking.apk` (up to v1.8: `quest-hand-tracking-for-blender.apk`) and `QuestBodyAndHandsTracking_<ver>.zip` (up to v1.8: `OculusQuestHandTracking_<ver>.zip`).
 Hand models: [`blender_models/BothHands.blend`](blender_models/BothHands.blend) from this repo (*Download raw file*).
 
-1. **Quest app** – headset in *Developer Mode* (Meta Horizon phone app → Devices → Developer Mode), USB cable to the PC, then either drag the APK onto **SideQuest**, or run `adb install -r quest-hand-tracking-for-blender.apk`.
+1. **Quest app** – headset in *Developer Mode* (Meta Horizon phone app → Devices → Developer Mode), USB cable to the PC, then either drag the APK onto **SideQuest**, or run `adb install -r quest-body-and-hands-tracking.apk` (installs over the old version, same package id).
    The app shows up in *Library → Unknown Sources* as **Quest Hand Tracking**.
-2. **Blender add-on** – *Edit → Preferences → Add-ons → ⌄ → Install from Disk…* → pick the `.zip` → enable *Oculus Quest Hand Tracking*.
+2. **Blender add-on** – *Edit → Preferences → Add-ons → ⌄ → Install from Disk…* → pick the `.zip` → enable *Quest Body and Hands Tracking*. Upgrading from v1.8 or older (*Oculus Quest Hand Tracking*): remove that add-on first, the package was renamed and both cannot be enabled together. Scene settings are kept.
 3. Open `BothHands.blend`, press **N** in the 3D Viewport → **Quest Hands** tab → set *Right Hand* / *Left Hand* to the two hand armatures → **Start**.
    Windows Firewall asks about Blender the first time – allow it on *Private* networks (UDP 5005).
 4. Find your PC IP (`ipconfig` → IPv4 address, e.g. `192.168.1.20`). PC and Quest must be on the same Wi-Fi/LAN.
@@ -66,10 +66,10 @@ Connect the Quest via USB, open the project in Godot and use *One-click deploy* 
 **Blender add-on zip** – version comes from the git tag:
 ```
 git tag v1.7.0
-python make_release.py            # -> releases/OculusQuestHandTracking_v1.7.0.zip
+python make_release.py            # -> releases/QuestBodyAndHandsTracking_v1.9.0.zip
 python make_release.py --strict   # refuse if there are uncommitted changes or HEAD is not on a tag
 ```
-**Quest APK** – in Godot: *Project → Export… → Android → Export Project* → save as `releases/quest-hand-tracking-for-blender.apk`.
+**Quest APK** – in Godot: *Project → Export… → Android → Export Project* → save as `releases/quest-body-and-hands-tracking.apk`.
 With *Export With Debug* ticked it is signed with Godot's debug keystore (fine for sideloading); unticked needs a release keystore in the preset.
 Keep `version/name` in `export_presets.cfg` equal to the tag.
 
@@ -81,7 +81,7 @@ Upload both files to a GitHub release for the tag.
 | Start / Stop | Opens / closes the UDP socket thread. Stop also writes `quest_dumps/dump_*.json` and `quest_last_frames.jsonl` next to the saved .blend (or `~/QuestHandTracking`). |
 | Right Hand / Left Hand | Hand armatures to drive. |
 | Head | Object that gets the headset position and rotation (–Z = view direction, +Y = up). |
-| Body | Humanoid armature driven by body tracking: Godot humanoid names (axes = tracker axes) or Mixamo names in T-pose (axes corrected per bone). Hips get position + rotation, other bones rotation only (model proportions), the neck keeps its rest pose, fingers follow the hand tracker. Start works with only a Body set. |
+| Body | Humanoid armature driven by body tracking: Godot humanoid names (axes = tracker axes) or Mixamo names in T-pose (axes corrected per bone). Hips get position + rotation, other bones rotation only (model proportions), the neck keeps its rest pose, fingers follow the hand tracker. Start works with only a Body set. **Straighten head** (0–1, default 1) moves the head bone onto the end of the neck: auto-rigs often place the head joint a few cm in front of it, which looks like a head pushed forward. **Prepare Mixamo Body** – see below. |
 | Rig | Auto / Native / Geometric. |
 | Bone length | From Quest / From model. |
 | Inactive hand | Hold (last pose) / Hide / Rest pose. |
@@ -93,7 +93,7 @@ The start menu (keypad for the PC IP) has four buttons: **RESET IP**, **AVATAR o
 
 - **AVATAR**: a blue, 30 % transparent humanoid (`assets/avatar/Avatar.glb`, 1.78 m, Mixamo rig) driven by `XRBodyModifier3D`; replaces the yellow hands while body tracking has data. Its head is hidden (you are inside it). `body_rest_lengths.gd` keeps the spine/neck/head at the model's proportions (Meta's neck joint points forward to the middle of the head) while shoulders, arms and hands stay exactly on yours.
 - **MIRROR**: placed once, 1 m to your left when you press START.
-- **Record Start / Stop**: two buttons in front of you, a bit above the eyes. Touch one with an index fingertip to toggle; after a touch they are locked for 5 s (no double triggers). Each toggle sends a `QCTL` packet; the Blender add-on prints it to the system console (*Window → Toggle System Console*) – recording itself is the next step.
+- **Record Start / Stop**: two buttons in front of you, a bit above the eyes. Touch one with an index fingertip to toggle; after a touch they are locked for 5 s (no double triggers). Start shows a 3 s countdown in front of your eyes (time to get into the pose), then sends `QCTL` record start and shows `REC m:ss` until you touch Stop. See *Recording takes*.
 
 Legs bent while you stand? Meta fits the generated legs to the floor height of your Guardian – redraw the boundary / set the floor in the headset settings.
 
@@ -124,8 +124,22 @@ Joint order: Hips, Spine, Chest, UpperChest, Neck, Head, Left/Right Shoulder, Up
 ## Binary packet – QCTL v1 (control)
 `"QCTL"`, u8 version = 1, u8 command (1 = record start, 2 = record stop), u16 reserved, u32 time ms, u32 sequence – 16 B, sent 3× with the same sequence (the receiver drops repeats).
 
+## Take file – .qrec v1
+`"QREC"`, u8 version = 1, 3 × pad, f64 start (unix time); then per datagram: f64 receive time, u16 length, the QHND/QBDY datagram as received.
+
+## Recording takes
+1. Press **Start** in the add-on, put the headset on, touch **Record Start** (or press **Record** in the panel – no countdown).
+2. Perform; touch **Record Stop**.
+3. The add-on writes the raw packets to `quest_takes/take_YYYYMMDD_HHMMSS.qrec` next to the .blend and, with **Auto bake** on, bakes it right away into a new action `Take_…` on the Body, the hand armatures and the Head object (one action, a slot per object). The previous action stays in the file (fake user).
+
+How the bake works: packets are timed by the Quest clock (not by Wi-Fi arrival), every packet is applied with the same code as the live preview, and the resulting bone/object channels are resampled to the scene frame rate from the start frame (linear keys, quaternion sign kept continuous); the frame range is set to the take. Bones the tracking never touched stay unanimated. Optional zero-phase low-pass smoothing: **Smooth body** / **Fingers** in Hz (0 = raw; try 6 and 8–10). The raw take is kept, so you can re-bake it with other settings or onto another rig: **Bake file…** or the *Bake take_…* buttons for the last takes. While the timeline plays, the live stream does not override the pose.
+
+A take is closed automatically after 2 s without packets (headset off, app closed) or after 10 min. Stop in the panel also closes a running take.
+
 ## Driving a Mixamo character
-**Easiest (body tracking):** put the Mixamo character in T-pose as rest pose, set it as **Body**, rotate Head Origin 180° on Z. `rest_models.blend` is a ready example (Body = Armature, Head Origin = QuestOrigin).
+**Easiest (body tracking):** import the Mixamo FBX (downloaded *With Skin*, T-pose), select its armature and press **Prepare Mixamo Body** in the Quest Hands panel. In one step it bakes the T-pose from the action into the mesh and makes it the rest pose (removing the action), applies the importer's 90° rotation and 0.01 scale, optionally scales the character to a given height, checks the bone names and that the arms are horizontal, sets it as **Body** and creates a `QuestOrigin` empty rotated 180° on Z as Head Origin if none is set. Meshes with shape keys cannot have the pose baked in – untick *Current pose as rest* for them (the rest pose must then already be a T-pose).
+
+`rest_models.blend` is a ready example (Body = Armature, Head Origin = QuestOrigin).
 
 **Hands only (constraints):** scripts in `blender_scripts/` (open in the Scripting workspace, edit the settings at the top, *Run Script*). All constraints they create are named `QH …`, so re-running is safe.
 
@@ -158,7 +172,7 @@ The Mixamo character itself is **not** included (Mixamo license) – download yo
 | `quest_dump.json` | Sample frame for testing without a headset |
 
 ## Roadmap
-- Recording to keyframes (driven by the Record buttons), offline smoothing.
+- Trimming takes, retarget of takes to non-human characters (dragon paw).
 - Mirror without negative scale (pose copy with left/right swap).
 - Retarget to non-human rigs (dragon paw).
 

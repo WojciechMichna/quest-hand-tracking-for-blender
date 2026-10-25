@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Builds the Blender add-on release package:
-    releases/OculusQuestHandTracking_<tag>.zip
+    releases/QuestBodyAndHandsTracking_<tag>.zip
 
-The zip contains OculusQuestHandTracking/__init__.py (a copy of blender_addon/blender_hand_receiver.py),
+The zip contains QuestBodyAndHandsTracking/__init__.py (a copy of blender_addon/blender_hand_receiver.py),
 so in Blender: Edit > Preferences > Add-ons > Install from Disk > pick the zip.
 
 Version: from the git tag (`git describe --tags`).
@@ -25,8 +25,10 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOURCE = os.path.join(ROOT, "blender_addon", "blender_hand_receiver.py")
-PACKAGE = "OculusQuestHandTracking"
-ADDON_NAME = "Oculus Quest Hand Tracking"
+PACKAGE = "QuestBodyAndHandsTracking"
+ADDON_NAME = "Quest Body and Hands Tracking"
+# package names of earlier releases - Blender sees them as a different add-on, remove them before installing
+OLD_PACKAGES = ("OculusQuestHandTracking",)
 OUT_DIR = os.path.join(ROOT, "releases")
 
 
@@ -85,6 +87,8 @@ def main():
     print(f"[release] {out}")
     print(f"[release] add-on version: {nums}  (tag {tag})")
     print("[release] Blender: Edit > Preferences > Add-ons > Install from Disk > pick this zip")
+    print(f"[release] Upgrading from {', '.join(OLD_PACKAGES)} (\"Oculus Quest Hand Tracking\", <= v1.8): remove "
+          "that add-on first - both register the same operators and scene settings")
 
 
 if __name__ == "__main__":

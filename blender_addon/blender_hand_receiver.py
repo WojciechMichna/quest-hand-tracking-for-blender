@@ -1,6 +1,6 @@
 """
-Blender Live Hand Tracking Receiver (Meta Quest 3 / Godot -> Blender)
-=====================================================================
+Quest Body and Hands Tracking - live receiver for Blender (Meta Quest 3 / Godot -> Blender)
+==========================================================================================
 
 Retargeting calibrated from the armature REST POSE (no hand-guessed quaternion
 component swaps, independent of bone roll in GEOMETRIC mode).
@@ -30,12 +30,12 @@ Panel: 3D Viewport > Sidebar (N) > "Quest Hands" tab (Start/Stop).
 """
 
 bl_info = {
-    "name": "Oculus Quest Hand Tracking",
+    "name": "Quest Body and Hands Tracking",
     "author": "Wojciech Michna",
-    "version": (1, 7, 0),
+    "version": (1, 9, 0),
     "blender": (4, 2, 0),
     "location": "3D Viewport > Sidebar (N) > Quest Hands",
-    "description": "Live hand tracking from Meta Quest 3 (Godot app, UDP) onto hand armatures",
+    "description": "Live hand, head and full-body tracking from Meta Quest 3 (Godot app, UDP) onto hand armatures and humanoid rigs (Godot humanoid / Mixamo), with recording of takes baked to actions",
     "category": "Animation",
 }
 
@@ -540,7 +540,8 @@ def apply_frame(frame, scene=None):
     body = frame.get("body")
     if body and t["Body"] is not None:
         _update_body(t["Body"], body, _anchor(t["HeadOrigin"]) @ _recenter(scene),
-                     {"Left": frame.get("left"), "Right": frame.get("right")})
+                     {"Left": frame.get("left"), "Right": frame.get("right")},
+                     getattr(scene, "quest_straighten_head", 1.0))
     if frame.get("_body_only"):
         return
 
@@ -602,6 +603,8 @@ for _s in ("Left", "Right"):
 # Meta's neck joint points forward to the middle of the head -> the avatar's head ended up
 # in front of the body. The Head still gets the tracked world rotation.
 BODY_REST_BONES = {"Neck"}
+# 1.0: the neck is aligned with the tracked head's up axis; 0.0: rest pose on the chest
+NECK_FOLLOW_HEAD = 1.0
 
 
 class BodyCalibration:
@@ -650,8 +653,18 @@ class BodyCalibration:
             self.rest_inv[b.name] = b.matrix_local.inverted()
             self.parent[b.name] = b.parent.name if b.parent else None
         self.hips = self.bone.get("Hips")
+        # Rigs (Mixamo auto-rig) often place the Head joint in front of / behind the end of the
+        # neck; with a tracked spine this reads as a head pushed forward. head_gap = rest distance
+        # from the neck tail to the head joint; "Straighten head" moves the head onto the neck tail.
+        self.neck, self.head = self.bone.get("Neck"), self.bone.get("Head")
+        self.neck_len, self.head_gap = 0.0, 0.0
+        if self.neck and self.head:
+            nb, hb = bones[self.neck], bones[self.head]
+            self.neck_len = nb.length
+            self.head_gap = (hb.head_local - nb.tail_local).length
         self.ok = True
-        print(f"[QuestReceiver] body rig {arm_obj.name}: {self.kind}, {len(self.bone)} mapped bones")
+        print(f"[QuestReceiver] body rig {arm_obj.name}: {self.kind}, {len(self.bone)} mapped bones, "
+              f"head {self.head_gap * 100:.1f} cm from the neck tail")
 
 
 _body_calib = {}
@@ -681,11 +694,12 @@ def _finger_world_rotations(hand, side):
     return out
 
 
-def _update_body(arm_obj, body, base, hands=None):
+def _update_body(arm_obj, body, base, hands=None, straighten=1.0):
     """base = HeadOrigin * recenter (same space as the head). Each tracked joint gives the world
     rotation of its bone (plus a per-bone axis correction for non-Godot rigs); only Hips also gets
     its position - other bones keep the model's bone lengths. Fingers come from the hand tracker
-    (hands = {"Left": hand frame, "Right": ...}). Bones without data follow their parents."""
+    (hands = {"Left": hand frame, "Right": ...}). Bones without data follow their parents.
+    straighten 0..1: move the Head joint onto the end of the neck (see BodyCalibration.head_gap)."""
     cal = _get_body_calib(arm_obj)
     if not cal.ok:
         return
@@ -712,10 +726,31 @@ def _update_body(arm_obj, body, base, hands=None):
     to_arm = arm_obj.matrix_world.normalized().inverted() @ base
     live = {}
     pbones = arm_obj.pose.bones
+    neck = cal.bone.get("Neck")
+    head_t = target.get(cal.bone.get("Head"))
     for name in cal.order:
         rest, par = cal.rest[name], cal.parent[name]
         attached = (live[par] @ cal.rest_inv[par] @ rest) if par else rest.copy()
         t = target.get(name)
+        if t is None and name == neck and head_t is not None:
+            # Neck along the tracked head's up axis (Meta's chest leans forward, so the rest
+            # neck on top of it pushed the head in front of the body)
+            hq = (to_arm @ _room_matrix([0, 0, 0], [head_t[0].x, head_t[0].y, head_t[0].z, head_t[0].w])
+                  ).to_quaternion() @ cal.corr[cal.bone["Head"]]
+            nq = attached.to_quaternion()
+            up = Vector((0.0, 1.0, 0.0))
+            diff = (nq @ up).rotation_difference(hq @ up)
+            nq = Quaternion().slerp(diff, NECK_FOLLOW_HEAD) @ nq
+            L = nq.to_matrix().to_4x4()
+            L.translation = attached.translation
+            live[name] = L
+            pb = pbones.get(name)
+            if pb is not None:
+                basis = attached.inverted() @ L
+                pb.rotation_mode = 'QUATERNION'
+                pb.rotation_quaternion = basis.to_quaternion()
+                pb.location = basis.to_translation()
+            continue
         if t is None:
             live[name] = attached
             continue
@@ -724,6 +759,9 @@ def _update_body(arm_obj, body, base, hands=None):
                                   [q.x, q.y, q.z, q.w])
         L = (M.to_quaternion() @ cal.corr[name]).to_matrix().to_4x4()
         L.translation = M.translation if name == cal.hips else attached.translation
+        if name == cal.head and straighten > 0.0 and cal.head_gap > 1e-4 and cal.neck in live:
+            neck_tail = live[cal.neck] @ Vector((0.0, cal.neck_len, 0.0))
+            L.translation = attached.translation.lerp(neck_tail, min(straighten, 1.0))
         live[name] = L
         pb = pbones.get(name)
         if pb is not None:
@@ -903,6 +941,47 @@ class HandReceiverThread(threading.Thread):
         self.last_size = 0
         # raw packets from the last ~HISTORY_SECONDS (written to a file on Stop)
         self.history = collections.deque(maxlen=HISTORY_MAX_PACKETS)
+        self.rec = None                       # TakeWriter while recording
+        self.rec_lock = threading.Lock()
+        self.finished_takes = collections.deque()    # .qrec paths for the main thread to bake
+
+    def start_recording(self, source):
+        with self.rec_lock:
+            if self.rec is not None:
+                return self.rec.path
+            try:
+                self.rec = TakeWriter(source)
+            except OSError as e:
+                print(f"[QuestReceiver] Cannot start recording: {e}")
+                return None
+            print(f"[QuestReceiver] RECORDING ({source}) -> {self.rec.path}")
+            return self.rec.path
+
+    def stop_recording(self, reason):
+        with self.rec_lock:
+            rec, self.rec = self.rec, None
+        if rec is None:
+            return None
+        rec.close()
+        print(f"[QuestReceiver] Recording stopped ({reason}): {rec.packets} packets, "
+              f"{time.time() - rec.started:.1f} s -> {rec.path}")
+        if rec.packets:
+            self.finished_takes.append(rec.path)
+        else:
+            try:
+                os.remove(rec.path)
+            except OSError:
+                pass
+        return rec.path
+
+    def _check_recording(self, now):
+        rec = self.rec
+        if rec is None:
+            return
+        if now - rec.last_packet > REC_IDLE_STOP:
+            self.stop_recording(f"no packets for {REC_IDLE_STOP:.0f} s")
+        elif now - rec.started > REC_MAX_SECONDS:
+            self.stop_recording(f"limit {REC_MAX_SECONDS:.0f} s")
 
     def run(self):
         kill = KILL_MAGIC + self.token
@@ -911,6 +990,7 @@ class HandReceiverThread(threading.Thread):
             try:
                 data, _ = self.sock.recvfrom(65535)
             except socket.timeout:
+                self._check_recording(time.time())
                 continue
             except OSError:
                 break
@@ -928,7 +1008,20 @@ class HandReceiverThread(threading.Thread):
                     self.last_ctrl_seq = c["seq"]
                     self.ctrl_events.append((time.time(), c))
                     print(f"[QuestReceiver] CTRL {c['name']} (cmd {c['cmd']}, seq {c['seq']}, quest time {c['time']} ms)")
+                    if c["cmd"] == 1:
+                        self.start_recording("headset")
+                    elif c["cmd"] == 2:
+                        self.stop_recording("headset")
                 continue
+            if self.rec is not None:
+                now = time.time()
+                with self.rec_lock:
+                    if self.rec is not None:
+                        try:
+                            self.rec.write(now, data)
+                        except OSError as e:
+                            print(f"[QuestReceiver] Recording write failed: {e}")
+                self._check_recording(now)
             self.history.append((time.time(), pkt))
             if pkt.get("_body_only"):
                 with self.lock:
@@ -1006,7 +1099,13 @@ def _make_timer():
             st["status"] = "Stopped"
             _tag_redraw()
             return None
+        if th.finished_takes:
+            scene = bpy.data.scenes.get(st.get("scene") or "") or bpy.context.scene
+            _bake_pending(scene)
+            _tag_redraw()
         frame = th.get_latest_frame()
+        if frame and _is_playing():
+            frame = None       # timeline playback shows the baked takes - do not override the pose
         if frame:
             try:
                 scene = bpy.data.scenes.get(st.get("scene") or "") or bpy.context.scene
@@ -1025,6 +1124,10 @@ def _make_timer():
                 st["status"] += (f" | body: {_body_stats['tracked']} tracked, {_body_stats['generated']} generated"
                                  + (" (legs)" if _body_stats["flags"] & 1 else "")
                                  + (" HIGH" if _body_stats["flags"] & 2 else ""))
+            rec = th.rec
+            if rec is not None:
+                sec = int(now - rec.started)
+                st["status"] = f"REC {sec // 60}:{sec % 60:02d} ({rec.packets} pkts) | " + st["status"]
             if th.bad_packets:
                 st["status"] += f" | bad: {th.bad_packets}"
                 print(f"[QuestReceiver] bad packets: {th.bad_packets} (last error: {th.last_error})")
@@ -1044,6 +1147,14 @@ def _make_timer():
         return 0.008
 
     return timer_callback
+
+
+def _is_playing():
+    wm = getattr(bpy.context, "window_manager", None)
+    try:
+        return bool(wm) and any(w.screen.is_animation_playing for w in wm.windows)
+    except Exception:
+        return False
 
 
 def find_hand_armatures(scene):
@@ -1112,6 +1223,10 @@ def stop_stream():
     if th is not None and th.is_alive():
         th.kill()
         saved = _save_history(th)
+    if th is not None:
+        th.stop_recording("stream stopped")
+        st.setdefault("pending_takes", collections.deque()).extend(th.finished_takes)
+        th.finished_takes.clear()
     st["thread"] = None
     _reset_hand_state()
     st["status"] = f"Stopped | saved {os.path.basename(saved)}" if saved else "Stopped"
@@ -1152,6 +1267,404 @@ def _save_history(th):
     except OSError as e:
         print(f"[QuestReceiver] Could not save packet history: {e}")
         return None
+
+
+# ----------------------------------------------------------------- recording (takes)
+# A take = the raw QHND/QBDY datagrams between QCTL record_start and record_stop (headset buttons) or
+# the Record button in the panel, written as they arrive to <output_dir>/quest_takes/take_*.qrec.
+# Raw bytes, so a take can always be baked again (other rig, other smoothing, newer add-on).
+# File: "QREC" u8 version, 3 x pad, f64 start (unix time); then per packet: f64 receive time,
+# u16 length, the datagram. Timing for the bake comes from the Quest time inside the packets.
+TAKES_FOLDER = "quest_takes"
+QREC_MAGIC = b"QREC"
+QREC_VERSION = 1
+REC_MAX_SECONDS = 600.0          # a take is closed automatically after this
+REC_IDLE_STOP = 2.0              # ... or when no packets arrive for this long (headset off / app closed)
+FINGER_TOKENS = ("Thumb", "Index", "Middle", "Ring", "Little", "Pinky")
+
+
+def takes_dir():
+    d = os.path.join(output_dir(), TAKES_FOLDER)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def list_takes(limit=5):
+    try:
+        d = os.path.join(output_dir(), TAKES_FOLDER)       # no makedirs from the panel
+        files = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".qrec")]
+    except OSError:
+        return []
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files[:limit]
+
+
+class TakeWriter:
+    def __init__(self, source):
+        self.path = os.path.join(takes_dir(), time.strftime("take_%Y%m%d_%H%M%S.qrec"))
+        self.started = time.time()
+        self.last_packet = self.started
+        self.packets = 0
+        self.source = source
+        self.f = open(self.path, "wb")
+        self.f.write(QREC_MAGIC + struct.pack("<B3xd", QREC_VERSION, self.started))
+
+    def write(self, t, data):
+        self.f.write(struct.pack("<dH", t, len(data)))
+        self.f.write(data)
+        self.packets += 1
+        self.last_packet = t
+
+    def close(self):
+        try:
+            self.f.close()
+        except OSError:
+            pass
+
+
+def read_take(path):
+    """-> list of (receive time, datagram bytes)"""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != QREC_MAGIC:
+        raise ValueError(f"{os.path.basename(path)}: not a .qrec take")
+    ver = data[4]
+    if ver != QREC_VERSION:
+        raise ValueError(f"unsupported take version {ver}")
+    off, out = 16, []
+    while off + 10 <= len(data):
+        t, n = struct.unpack_from("<dH", data, off)
+        off += 10
+        if off + n > len(data):
+            break           # truncated last packet (crash while writing)
+        out.append((t, data[off:off + n]))
+        off += n
+    return out
+
+
+def take_samples(packets):
+    """Raw packets -> [(seconds from the first sample, full frame)]. Packets with the same Quest time
+    (QHND + QBDY of one headset frame) are merged; every sample carries the newest hands/head and
+    body seen so far, the hands only from its own QHND (missing hand = not tracked then)."""
+    samples, hands_frame, body = [], None, None
+    cur_t, cur = None, None
+    prev_raw, unwrap = None, 0
+
+    def flush():
+        if cur is not None:
+            fr = dict(hands_frame or {})
+            fr.pop("_body_only", None)
+            if body is not None:
+                fr["body"] = body
+            samples.append((cur_t, fr))
+
+    for _rt, raw in packets:
+        try:
+            pkt = decode_packet(raw)
+        except Exception:
+            continue
+        if "_ctrl" in pkt or "time" not in pkt:
+            continue
+        qt = int(pkt["time"])
+        if prev_raw is not None and qt < prev_raw - 0x7FFFFFFF:
+            unwrap += 0x100000000            # u32 ms wrapped
+        prev_raw = qt
+        t = qt + unwrap
+        if t != cur_t:
+            flush()
+            cur_t, cur = t, True
+        if pkt.get("_body_only"):
+            body = pkt["body"]
+        else:
+            hands_frame = pkt
+    flush()
+    if not samples:
+        return []
+    t0 = samples[0][0]
+    out, last = [], None
+    for t, fr in samples:
+        s = (t - t0) / 1000.0
+        if last is not None and s <= last:
+            continue                          # duplicate / out of order
+        out.append((s, fr))
+        last = s
+    return out
+
+
+def _butter_lowpass(fc, fs):
+    """2nd order Butterworth low-pass biquad coefficients (b0, b1, b2, a1, a2)."""
+    k = math.tan(math.pi * fc / fs)
+    q = 1.0 / math.sqrt(2.0)
+    norm = 1.0 / (1.0 + k / q + k * k)
+    b0 = k * k * norm
+    return b0, 2.0 * b0, b0, 2.0 * (k * k - 1.0) * norm, (1.0 - k / q + k * k) * norm
+
+
+def _filtfilt(x, coef):
+    """Zero-phase (forward + backward) biquad filter with reflected padding."""
+    n = len(x)
+    if n < 4:
+        return list(x)
+    pad = min(n - 1, 30)
+    ext = [2 * x[0] - v for v in x[pad:0:-1]] + list(x) + [2 * x[-1] - v for v in x[-2:-pad - 2:-1]]
+    b0, b1, b2, a1, a2 = coef
+
+    def run(seq):
+        y, x1, x2, y1, y2 = [], seq[0], seq[0], seq[0], seq[0]
+        for v in seq:
+            o = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, v, y1, o
+            y.append(o)
+        return y
+    y = run(ext)
+    y = run(y[::-1])[::-1]
+    return y[pad:pad + n]
+
+
+def _fcurves_for(action, obj):
+    """F-curve collection of `obj` in `action` (slotted actions in Blender 4.4+, legacy before)."""
+    if hasattr(action, "slots"):
+        from bpy_extras import anim_utils
+        slot = next((s for s in action.slots if s.target_id_type == 'OBJECT' and s.name_display == obj.name), None)
+        if slot is None:
+            slot = action.slots.new(id_type='OBJECT', name=obj.name)
+        cb = anim_utils.action_ensure_channelbag_for_slot(action, slot)
+        return cb.fcurves, slot
+    return action.fcurves, None
+
+
+def _new_fcurve(fcurves, path, index, group):
+    try:
+        return fcurves.new(path, index=index, group_name=group)
+    except TypeError:
+        return fcurves.new(path, index=index, action_group=group)
+
+
+def _capture_specs(t):
+    """What a take records: [(object, kind, name)] - pose bones of the Body/Hand armatures,
+    object transforms of the hand armatures and the Head object."""
+    specs = []
+    for key in ("Body", "Right", "Left"):
+        obj = t[key]
+        if obj is not None and not any(s[0] == obj for s in specs if s[1] == "bone"):
+            for pb in obj.pose.bones:
+                specs.append((obj, "bone", pb.name))
+    for key in ("Right", "Left", "Head"):
+        obj = t[key]
+        if obj is not None and not any(s[0] == obj and s[1] == "object" for s in specs):
+            specs.append((obj, "object", obj.name))
+    return specs
+
+
+def _read_spec(obj, kind, name):
+    if kind == "bone":
+        pb = obj.pose.bones[name]
+        q = pb.rotation_quaternion
+        return [q.w, q.x, q.y, q.z, pb.location.x, pb.location.y, pb.location.z]
+    if obj.rotation_mode == 'QUATERNION':
+        q = obj.rotation_quaternion
+        r = [q.w, q.x, q.y, q.z]
+    else:
+        r = list(obj.rotation_euler)
+    return r + list(obj.location)
+
+
+def _spec_channels(obj, kind, name):
+    """[(data_path, index, is_quaternion_component)] matching _read_spec"""
+    if kind == "bone":
+        p = f'pose.bones["{bpy.utils.escape_identifier(name)}"]'
+        return [(p + ".rotation_quaternion", i, True) for i in range(4)] + [(p + ".location", i, False) for i in range(3)]
+    if obj.rotation_mode == 'QUATERNION':
+        rot = [("rotation_quaternion", i, True) for i in range(4)]
+    else:
+        rot = [("rotation_euler", i, False) for i in range(3)]
+    return rot + [("location", i, False) for i in range(3)]
+
+
+def bake_take(path, scene, smooth_body=0.0, smooth_fingers=0.0, set_range=True, progress=None):
+    """Bakes a .qrec take onto the scene targets (Body, hands, Head) as a new action "<take name>",
+    resampled to the scene frame rate from scene.frame_start. Returns a status message."""
+    samples = take_samples(read_take(path))
+    if len(samples) < 2:
+        raise ValueError(f"{os.path.basename(path)}: no usable packets")
+    t = get_targets(scene)
+    specs = _capture_specs(t)
+    if not specs:
+        raise ValueError("Nothing to bake into - set Body, Right/Left Hand or Head")
+    objs = {s[0] for s in specs}
+    # actions on the targets would fight with apply_frame while reading poses - detach for the bake
+    saved_actions = {}
+    for o in objs:
+        ad = o.animation_data
+        if ad is not None and ad.action is not None:
+            saved_actions[o] = (ad.action, getattr(ad, "action_slot", None))
+            ad.action.use_fake_user = True
+            ad.action = None
+    lost = getattr(scene, "quest_lost_hand", "HOLD")
+    scene.quest_lost_hand = "HOLD"
+    _body_last_good.clear()
+    _reset_hand_state()
+    for side in SIDES:
+        _last_good[side] = {}
+    _last_head_room["m"] = None
+    rows = []          # per sample: flat list of all spec values
+    try:
+        n = len(samples)
+        for i, (_s, fr) in enumerate(samples):
+            apply_frame(fr, scene)
+            row = []
+            for o, kind, name in specs:
+                row.extend(_read_spec(o, kind, name))
+            rows.append(row)
+            if progress and i % 200 == 0:
+                progress(i / n * 0.8)
+    finally:
+        scene.quest_lost_hand = lost
+
+    chans = [c for s in specs for c in _spec_channels(*s)]
+    nch = len(chans)
+    # quaternion sign continuity (q and -q are the same rotation; interpolation needs the near one)
+    qgroups = []
+    col = 0
+    for s in specs:
+        k = len(_spec_channels(*s))
+        if _spec_channels(*s)[0][2]:
+            qgroups.append(col)
+        col += k
+    for c in qgroups:
+        for i in range(1, len(rows)):
+            a, b = rows[i - 1], rows[i]
+            if sum(a[c + j] * b[c + j] for j in range(4)) < 0.0:
+                for j in range(4):
+                    b[c + j] = -b[c + j]
+    # euler continuity
+    col = 0
+    for s in specs:
+        ch = _spec_channels(*s)
+        if ch[0][0] == "rotation_euler":
+            for i in range(1, len(rows)):
+                prev = mathutils_euler(rows[i - 1][col:col + 3])
+                e = mathutils_euler(rows[i][col:col + 3])
+                e.make_compatible(prev)
+                rows[i][col:col + 3] = list(e)
+        col += len(ch)
+
+    # resample to the scene frame rate
+    fps = scene.render.fps / (scene.render.fps_base or 1.0)
+    times = [s for s, _f in samples]
+    total = times[-1]
+    nframes = int(total * fps) + 1
+    out = [[0.0] * nframes for _ in range(nch)]
+    j = 0
+    for k in range(nframes):
+        tt = k / fps
+        while j < len(times) - 2 and times[j + 1] < tt:
+            j += 1
+        t0, t1 = times[j], times[j + 1]
+        a = 0.0 if t1 <= t0 else min(1.0, max(0.0, (tt - t0) / (t1 - t0)))
+        r0, r1 = rows[j], rows[j + 1]
+        for c in range(nch):
+            out[c][k] = r0[c] + (r1[c] - r0[c]) * a
+
+    # optional zero-phase smoothing
+    if smooth_body > 0.0 or smooth_fingers > 0.0:
+        col = 0
+        for o, kind, name in specs:
+            k = len(_spec_channels(o, kind, name))
+            finger = (o == t["Right"] or o == t["Left"]) and kind == "bone" or \
+                (kind == "bone" and any(tok in name for tok in FINGER_TOKENS))
+            fc = smooth_fingers if finger else smooth_body
+            if fc > 0.0:
+                coef = _butter_lowpass(min(fc, fps * 0.45), fps)
+                for c in range(col, col + k):
+                    out[c] = _filtfilt(out[c], coef)
+            col += k
+    # normalise quaternions after interpolation / filtering
+    for c in qgroups:
+        for k in range(nframes):
+            l = math.sqrt(sum(out[c + j][k] ** 2 for j in range(4))) or 1.0
+            for j in range(4):
+                out[c + j][k] /= l
+    if progress:
+        progress(0.9)
+
+    # write the action: one slot per object
+    name = os.path.splitext(os.path.basename(path))[0].replace("take_", "Take_")
+    action = bpy.data.actions.new(name)
+    action.use_fake_user = True
+    start = scene.frame_start
+    frames = [float(start + k) for k in range(nframes)]
+    col = 0
+    keyed = 0
+    slots = {}
+    for o, kind, nm in specs:
+        ch = _spec_channels(o, kind, nm)
+        fcs, slot = _fcurves_for(action, o)
+        slots[o] = slot
+        group = nm if kind == "bone" else "Object Transforms"
+        vals = out[col:col + len(ch)]
+        moving = any(max(v) - min(v) > 1e-6 for v in vals)
+        if kind == "bone":
+            rest = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            posed = any(abs(v[0] - r) > 1e-5 for v, r in zip(vals, rest))
+        else:
+            posed = True
+        for (dp, idx, _isq), v in zip(ch, vals):
+            if not (moving or posed):
+                continue        # bone never touched by the tracking - leave it unanimated
+            cnt = nframes if moving else 1      # constant pose: one key
+            fc = _new_fcurve(fcs, dp, idx, group)
+            fc.keyframe_points.add(cnt)
+            co = [0.0] * (2 * cnt)
+            co[0::2] = frames[:cnt]
+            co[1::2] = v[:cnt]
+            fc.keyframe_points.foreach_set("co", co)
+            fc.keyframe_points.foreach_set("interpolation", [1] * cnt)      # LINEAR
+            fc.update()
+            keyed += 1
+        col += len(ch)
+    for o in objs:
+        ad = o.animation_data_create()
+        ad.action = action
+        if slots.get(o) is not None:
+            ad.action_slot = slots[o]
+    if set_range:
+        scene.frame_end = start + nframes - 1
+    scene.frame_set(start)
+    if progress:
+        progress(1.0)
+    msg = (f"{name}: {len(samples)} samples, {total:.1f} s -> {nframes} frames @ {fps:g} fps, "
+           f"{keyed} curves on {len(objs)} object(s)")
+    print(f"[QuestReceiver] Baked {msg}")
+    return msg
+
+
+def mathutils_euler(v):
+    from mathutils import Euler
+    return Euler(v)
+
+
+def _bake_pending(scene, report=None):
+    """Bakes takes finished by the receiver (called on the main thread)."""
+    st = _state()
+    pending = st.setdefault("pending_takes", collections.deque())
+    th = st.get("thread")
+    if th is not None:
+        while th.finished_takes:
+            pending.append(th.finished_takes.popleft())
+    while pending:
+        path = pending.popleft()
+        st["last_take"] = path
+        if not getattr(scene, "quest_bake_auto", True):
+            st["last_bake"] = f"Saved {os.path.basename(path)} (auto bake off)"
+            continue
+        try:
+            st["last_bake"] = bake_take(path, scene, scene.quest_smooth_body, scene.quest_smooth_fingers)
+        except Exception as e:
+            st["last_bake"] = f"Bake failed: {e}"
+            print(f"[QuestReceiver] Bake of {path} failed: {e}")
+        if report:
+            report(st["last_bake"])
 
 
 def _m(m):
@@ -1244,6 +1757,7 @@ class QUESTHANDS_OT_toggle_stream(bpy.types.Operator):
     def execute(self, context):
         if is_running():
             stop_stream()
+            _bake_pending(context.scene, lambda m: self.report({'INFO'}, m))
             path = None
             try:
                 path = save_debug_dump(context.scene)
@@ -1291,6 +1805,221 @@ class QUESTHANDS_OT_recenter(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class QUESTHANDS_OT_record(bpy.types.Operator):
+    bl_idname = "questhands.record"
+    bl_label = "Record"
+    bl_description = ("Start / stop recording a take (same as the Record buttons in the headset, without the "
+                      "countdown). The take is saved to quest_takes/ and baked on stop if Auto bake is on")
+
+    @classmethod
+    def poll(cls, context):
+        return is_running()
+
+    def execute(self, context):
+        th = _state().get("thread")
+        if th.rec is None:
+            th.start_recording("panel")
+        else:
+            th.stop_recording("panel")
+            _bake_pending(context.scene, lambda m: self.report({'INFO'}, m))
+        _tag_redraw()
+        return {'FINISHED'}
+
+
+class QUESTHANDS_OT_bake_take(bpy.types.Operator):
+    bl_idname = "questhands.bake_take"
+    bl_label = "Bake Take"
+    bl_description = ("Bake a recorded take (.qrec) onto Body / hands / Head as a new action, resampled to the "
+                      "scene frame rate from the start frame")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: bpy.props.StringProperty(subtype='FILE_PATH', options={'SKIP_SAVE'})
+    filter_glob: bpy.props.StringProperty(default="*.qrec", options={'HIDDEN'})
+
+    def invoke(self, context, event):
+        if self.filepath:
+            return self.execute(context)
+        self.filepath = takes_dir() + os.sep
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        if not os.path.isfile(self.filepath):
+            self.report({'ERROR'}, f"No take: {self.filepath}")
+            return {'CANCELLED'}
+        wm = context.window_manager
+        wm.progress_begin(0, 100)
+        sc = context.scene
+        try:
+            msg = bake_take(self.filepath, sc, sc.quest_smooth_body, sc.quest_smooth_fingers,
+                            progress=lambda f: wm.progress_update(int(f * 100)))
+        except Exception as e:
+            self.report({'ERROR'}, f"Bake failed: {e}")
+            return {'CANCELLED'}
+        finally:
+            wm.progress_end()
+        st = _state()
+        st["last_take"], st["last_bake"] = self.filepath, msg
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+MIXAMO_REQUIRED = ("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
+                   "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+                   "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+                   "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot")
+
+
+def _mesh_height(meshes):
+    zs = [(m.matrix_world @ Vector(c)).z for m in meshes for c in m.bound_box]
+    return (max(zs) - min(zs)) if zs else 0.0
+
+
+def _select_only(context, objs, active):
+    for o in context.view_layer.objects:
+        o.select_set(False)
+    for o in objs:
+        o.hide_set(False)
+        o.select_set(True)
+    context.view_layer.objects.active = active
+
+
+class QUESTHANDS_OT_prepare_mixamo(bpy.types.Operator):
+    bl_idname = "questhands.prepare_mixamo_body"
+    bl_label = "Prepare Mixamo Body"
+    bl_description = ("Make an imported Mixamo character (FBX, T-pose) ready for the Body field: apply the "
+                      "importer's rotation/scale, store the current pose as the rest pose, optionally scale to a "
+                      "height, check the bone names, set it as Body (and a Head Origin if missing)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    height: bpy.props.FloatProperty(
+        name="Height", default=0.0, min=0.0, max=5.0, unit='LENGTH',
+        description="Scale the character to this height (top of the head to the soles). 0 = keep the size")
+    pose_as_rest: bpy.props.BoolProperty(
+        name="Current pose as rest", default=True,
+        description="Mixamo FBX keeps the T-pose in an action and a different rest pose - bake the current pose "
+                    "into the mesh and make it the rest pose, then remove the action")
+    set_body: bpy.props.BoolProperty(name="Set as Body", default=True)
+
+    @classmethod
+    def poll(cls, context):
+        o = context.active_object
+        return o is not None and (o.type == 'ARMATURE' or (o.parent is not None and o.parent.type == 'ARMATURE'))
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        arm = context.active_object
+        if arm.type != 'ARMATURE':
+            arm = arm.parent
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bones = arm.data.bones
+        hips = next((b.name for b in bones if b.name.endswith("Hips")), None)
+        if hips is None:
+            self.report({'ERROR'}, f"{arm.name}: no '*Hips' bone - not a Mixamo rig")
+            return {'CANCELLED'}
+        prefix = hips[:-4]
+        missing = [n for n in MIXAMO_REQUIRED if bones.get(prefix + n) is None]
+        if bones.get(prefix + "LeftArm") is None:
+            self.report({'ERROR'}, f"{arm.name}: Mixamo bone names not found (prefix '{prefix}'), missing: "
+                                   + ", ".join(missing[:6]))
+            return {'CANCELLED'}
+        meshes = [c for c in arm.children_recursive if c.type == 'MESH']
+        skinned = [(m, md) for m in meshes for md in m.modifiers if md.type == 'ARMATURE' and md.object == arm]
+        for m, md in skinned:
+            if m.data.shape_keys is not None and self.pose_as_rest:
+                self.report({'ERROR'}, f"{m.name} has shape keys - the pose cannot be baked into it; "
+                                       "untick 'Current pose as rest' or remove the shape keys")
+                return {'CANCELLED'}
+            if m.data.users > 1:
+                m.data = m.data.copy()
+        notes = []
+
+        # 1. current pose (Mixamo T-pose from the action) -> rest pose. Before applying the scale:
+        #    the action's hip location is in the importer's units (cm).
+        context.view_layer.update()
+        posed = any(not _is_identity(pb.matrix_basis) for pb in arm.pose.bones)
+        if self.pose_as_rest and posed:
+            for m, md in skinned:
+                settings = {k: getattr(md, k) for k in ("use_vertex_groups", "use_bone_envelopes",
+                                                       "use_deform_preserve_volume", "use_multi_modifier")}
+                with context.temp_override(object=m, active_object=m, selected_objects=[m]):
+                    bpy.ops.object.modifier_apply(modifier=md.name)
+                nm = m.modifiers.new("Armature", 'ARMATURE')
+                nm.object = arm
+                for k, v in settings.items():
+                    setattr(nm, k, v)
+                with context.temp_override(object=m, active_object=m, selected_objects=[m]):
+                    bpy.ops.object.modifier_move_to_index(modifier=nm.name, index=0)
+            _select_only(context, [arm], arm)
+            bpy.ops.object.mode_set(mode='POSE')
+            bpy.ops.pose.select_all(action='SELECT')
+            bpy.ops.pose.armature_apply(selected=False)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            notes.append("pose -> rest")
+        if arm.animation_data is not None and arm.animation_data.action is not None:
+            arm.animation_data.action = None
+            notes.append("action removed")
+        for pb in arm.pose.bones:
+            pb.matrix_basis = Matrix()
+        context.view_layer.update()
+
+        # 2. importer transform (FBX: rotation 90 deg X, scale 0.01) into the data
+        _select_only(context, [arm] + meshes, arm)
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+        context.view_layer.update()
+
+        # 3. height
+        h = _mesh_height(meshes)
+        if self.height > 0.0 and h > 1e-4:
+            arm.scale = arm.scale * (self.height / h)
+            context.view_layer.update()
+            _select_only(context, [arm] + meshes, arm)
+            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+            context.view_layer.update()
+            h = _mesh_height(meshes)
+        notes.append(f"height {h:.2f} m")
+
+        # 4. checks: T-pose arms, head offset
+        la = bones.get(prefix + "LeftArm")
+        v = (la.tail_local - la.head_local).normalized()
+        tilt = math.degrees(math.asin(min(1.0, abs(v.z))))
+        warn = []
+        if tilt > 20.0:
+            warn.append(f"arms {tilt:.0f} deg from horizontal - Body expects a T-pose rest")
+        if missing:
+            warn.append("missing: " + ", ".join(missing))
+
+        # 5. Body + Head Origin
+        sc = context.scene
+        if self.set_body:
+            sc.quest_body = arm
+            if sc.quest_head_origin is None:
+                o = bpy.data.objects.new("QuestOrigin", None)
+                o.empty_display_type = 'ARROWS'
+                o.rotation_euler = (0.0, 0.0, math.pi)   # character faces -Y, the user looks along +Y of Head Origin
+                (arm.users_collection[0] if arm.users_collection else sc.collection).objects.link(o)
+                sc.quest_head_origin = o
+                notes.append("QuestOrigin created")
+        _body_calib.clear()
+        cal = _get_body_calib(arm)
+        if cal.ok:
+            notes.append(f"{len(cal.bone)} bones mapped, head {cal.head_gap * 100:.1f} cm from neck")
+        _select_only(context, [arm], arm)
+        msg = f"{arm.name}: " + ", ".join(notes)
+        if warn:
+            self.report({'WARNING'}, msg + " | " + "; ".join(warn))
+        else:
+            self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+def _is_identity(m, eps=1e-5):
+    return all(abs(m[r][c] - (1.0 if r == c else 0.0)) < eps for r in range(4) for c in range(4))
+
+
 class QUESTHANDS_PT_panel(bpy.types.Panel):
     bl_label = "Quest Hands"
     bl_idname = "QUESTHANDS_PT_panel"
@@ -1309,12 +2038,44 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
             row.operator(QUESTHANDS_OT_toggle_stream.bl_idname, text="Start", icon='PLAY')
         layout.label(text=_state().get("status", ""), icon='CHECKMARK' if running else 'X')
 
+        st = _state()
+        th = st.get("thread")
+        recording = running and th is not None and th.rec is not None
+        box = layout.box()
+        row = box.row()
+        row.scale_y = 1.2
+        row.operator(QUESTHANDS_OT_record.bl_idname, text="Stop Recording" if recording else "Record",
+                     icon='SNAP_FACE' if recording else 'REC', depress=recording)
+        row = box.row(align=True)
+        row.prop(context.scene, "quest_bake_auto")
+        row.operator(QUESTHANDS_OT_bake_take.bl_idname, text="Bake file...", icon='FILEBROWSER')
+        r = box.row(align=True)
+        r.prop(context.scene, "quest_smooth_body")
+        r.prop(context.scene, "quest_smooth_fingers")
+        if st.get("last_bake"):
+            box.label(text=st["last_bake"], icon='ACTION')
+        takes = list_takes(4)
+        if takes:
+            col = box.column(align=True)
+            for pth in takes:
+                op = col.operator(QUESTHANDS_OT_bake_take.bl_idname, text=f"Bake {os.path.basename(pth)}",
+                                  icon='ANIM_DATA')
+                op.filepath = pth
+            box.operator("wm.path_open", text="Open takes folder", icon='FILE_FOLDER').filepath = takes_dir()
+
         sc = context.scene
         col = layout.column(align=True)
         col.prop(sc, "quest_right_hand", text="Right Hand", icon='ARMATURE_DATA')
         col.prop(sc, "quest_left_hand", text="Left Hand", icon='ARMATURE_DATA')
         col.prop(sc, "quest_head", text="Head", icon='OBJECT_DATA')
         col.prop(sc, "quest_body", text="Body", icon='OUTLINER_OB_ARMATURE')
+        if sc.quest_body is not None:
+            col.prop(sc, "quest_straighten_head", slider=True)
+            bc = _body_calib.get(sc.quest_body.name)
+            if bc is not None and bc.ok:
+                col.label(text=f"Body: {bc.kind}, {len(bc.bone)} bones, head gap {bc.head_gap * 100:.1f} cm",
+                          icon='BONE_DATA')
+        col.operator(QUESTHANDS_OT_prepare_mixamo.bl_idname, icon='ARMATURE_DATA')
         layout.prop(sc, "quest_rig_mode", expand=True)
         layout.label(text="Bone length:")
         layout.prop(sc, "quest_joint_positions", expand=True)
@@ -1358,7 +2119,8 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
         layout.label(text=f"UDP port: {PORT}")
 
 
-CLASSES = (QUESTHANDS_OT_toggle_stream, QUESTHANDS_OT_recenter, QUESTHANDS_PT_panel)
+CLASSES = (QUESTHANDS_OT_toggle_stream, QUESTHANDS_OT_recenter, QUESTHANDS_OT_prepare_mixamo,
+           QUESTHANDS_OT_record, QUESTHANDS_OT_bake_take, QUESTHANDS_PT_panel)
 
 
 def _poll_armature(self, obj):
@@ -1413,8 +2175,22 @@ def _register_props():
         description="Origin of the Quest space for the hands (object location + rotation). Empty = world origin")
     S.quest_body = bpy.props.PointerProperty(
         name="Body", type=bpy.types.Object, poll=_poll_armature, update=_on_body_change,
-        description="Humanoid armature (Godot humanoid bone names: Hips, Spine, LeftUpperArm...) "
-                    "driven by Meta body tracking, e.g. BodyHumanoid.blend")
+        description="Humanoid armature driven by Meta body tracking: Godot humanoid bone names (Hips, "
+                    "LeftUpperArm...) or a Mixamo rig in T-pose (use Prepare Mixamo Body after importing)")
+    S.quest_bake_auto = bpy.props.BoolProperty(
+        name="Auto bake", default=True,
+        description="Bake every finished take into a new action right away (the raw take stays in quest_takes/)")
+    S.quest_smooth_body = bpy.props.FloatProperty(
+        name="Smooth body", default=0.0, min=0.0, max=15.0, subtype='NONE',
+        description="Bake: zero-phase low-pass cutoff in Hz for body, head and wrists (0 = raw). "
+                    "Try 6; lower = smoother but fast moves get softer")
+    S.quest_smooth_fingers = bpy.props.FloatProperty(
+        name="Fingers", default=0.0, min=0.0, max=15.0,
+        description="Bake: low-pass cutoff in Hz for finger bones (0 = raw). Try 8-10")
+    S.quest_straighten_head = bpy.props.FloatProperty(
+        name="Straighten head", default=1.0, min=0.0, max=1.0,
+        description="Move the Head bone onto the end of the neck (rigs often have the head joint a few cm in "
+                    "front of the neck, which looks like a head pushed forward). 0 = model as rigged")
     S.quest_head = bpy.props.PointerProperty(
         name="Head", type=bpy.types.Object,
         description="Any object (Empty, Camera...) - gets headset position and rotation; object -Z = view direction")
@@ -1422,7 +2198,8 @@ def _register_props():
 
 def _unregister_props():
     for name in ("quest_right_hand", "quest_left_hand", "quest_head", "quest_body", "quest_rig_mode", "quest_joint_positions",
-                 "quest_lost_hand",
+                 "quest_lost_hand", "quest_straighten_head",
+                 "quest_bake_auto", "quest_smooth_body", "quest_smooth_fingers",
                  "quest_head_origin", "quest_hands_origin", "quest_hands_relative_to_head"):
         if hasattr(bpy.types.Scene, name):
             delattr(bpy.types.Scene, name)
