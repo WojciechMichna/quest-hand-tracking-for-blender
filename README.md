@@ -142,6 +142,8 @@ Joint order: Hips, Spine, Chest, UpperChest, Neck, Head, Left/Right Shoulder, Up
 
 How the bake works: packets are timed by the Quest clock (not by Wi-Fi arrival), every packet is applied with the same code as the live preview, and the resulting bone/object channels are resampled to the scene frame rate from the start frame (linear keys, quaternion sign kept continuous); the frame range is set to the take. Bones the tracking never touched stay unanimated. Optional zero-phase low-pass smoothing: **Smooth body** / **Fingers** in Hz (0 = raw; try 6 and 8–10). The raw take is kept, so you can re-bake it with other settings or onto another rig: **Bake file…** or the *Bake take_…* buttons for the last takes. While the timeline plays, the live stream does not override the pose.
 
+**Filters.** Live preview (*Live filter*, on by default, the takes are still recorded raw): a spike gate holds back a joint that jumps faster than a human can move until 3 samples agree on the new place (a hand found again 25 cm away is real and passes), then a One Euro filter removes jitter when you hold still and adds almost no lag on fast moves (*Smoothing* = min cutoff in Hz, *Speed* = beta). Bake: *Remove spikes* (on by default) runs a Hampel filter on the raw samples before resampling: a joint farther than 3 robust sigmas from the median of ±60 ms is replaced by the median, so 1 to 3 sample glitches disappear while real moves and steps stay; then the optional Butterworth smoothing.
+
 A take is closed automatically after 2 s without packets (headset off, app closed) or after 10 min. Stop in the panel also closes a running take.
 
 ## Driving a Mixamo character

@@ -1065,6 +1065,7 @@ class HandReceiverThread(threading.Thread):
             if pkt.get("_body_only"):
                 with self.lock:
                     self.latest_body = pkt["body"]
+                    self.latest_body["_time"] = pkt.get("time", 0)     # Quest time of the body sample
                     self.has_new_body = True
                     self.body_packets += 1
                 continue
@@ -1148,6 +1149,8 @@ def _make_timer():
         if frame:
             try:
                 scene = bpy.data.scenes.get(st.get("scene") or "") or bpy.context.scene
+                if getattr(scene, "quest_live_filter", True):
+                    frame = _live_filter.process(frame, scene.quest_live_min_cutoff, scene.quest_live_beta)
                 apply_frame(frame, scene)
                 st["last_frame"] = frame      # exactly the frame the current bone poses come from
             except Exception as e:
@@ -1167,6 +1170,8 @@ def _make_timer():
             if rec is not None:
                 sec = int(now - rec.started)
                 st["status"] = f"REC {sec // 60}:{sec % 60:02d} ({rec.packets} pkts) | " + st["status"]
+            if _live_filter.rejected:
+                st["status"] += f" | spikes held: {_live_filter.rejected}"
             if th.bad_packets:
                 st["status"] += f" | bad: {th.bad_packets}"
                 print(f"[QuestReceiver] bad packets: {th.bad_packets} (last error: {th.last_error})")
@@ -1235,6 +1240,7 @@ def start_stream(scene=None):
     _body_last_good.clear()
     _last_head_room["m"] = None
     _reset_hand_state()
+    _live_filter.reset()
     st0 = _state()
     st0["last_frame"] = None
     st0["compare"] = {}
@@ -1306,6 +1312,221 @@ def _save_history(th):
     except OSError as e:
         print(f"[QuestReceiver] Could not save packet history: {e}")
         return None
+
+
+# ----------------------------------------------------------------- filters
+# Live preview: spike gate + One Euro filter (Casiez et al. 2012) on the incoming frames, in Quest
+# room space, BEFORE they are applied to the rigs. Takes are recorded raw (before this filter).
+# Bake: Hampel spike removal before the Butterworth smoothing (see bake_take).
+
+def _oe_alpha(fc, dt):
+    """smoothing factor of a 1st order low-pass with cutoff fc (Hz) at time step dt (s)"""
+    tau = 1.0 / (2.0 * math.pi * fc)
+    return 1.0 / (1.0 + tau / dt)
+
+
+class _OEChannel:
+    __slots__ = ("y", "dx", "t", "pend", "pend_n")
+
+    def __init__(self):
+        self.y = None       # filtered value (list of floats)
+        self.dx = 0.0       # smoothed speed (m/s or rad/s)
+        self.t = None       # time of the last sample (s, Quest clock)
+        self.pend = None    # value of a jump waiting for confirmation
+        self.pend_n = 0
+
+
+class LiveFilter:
+    """Per joint value: 1) spike gate - a jump faster than a human can move is held back until
+    GATE_FRAMES consecutive samples agree on the new place (then it is real and accepted);
+    2) One Euro - cutoff = min_cutoff + beta * speed: strong smoothing when still (no jitter),
+    almost none on fast moves (no lag). Positions in m (speed x POS_SPEED_SCALE), rotations as
+    quaternions (speed in rad/s, slerp)."""
+    D_CUTOFF = 1.0          # Hz, low-pass of the speed estimate
+    RESET_GAP = 0.25        # s without data for a joint -> start over (hand found again, new stream)
+    GATE_FRAMES = 3         # samples that must agree before a jump is accepted
+    POS_MAX_SPEED = 8.0     # m/s - faster = tracking glitch
+    POS_GATE_MIN = 0.03     # m   - jumps below this are never gated
+    ROT_MAX_SPEED = 40.0    # rad/s
+    ROT_GATE_MIN = 0.35     # rad (20 deg)
+    POS_SPEED_SCALE = 10.0  # beta is per 0.1 m/s for positions, per rad/s for rotations
+
+    def __init__(self):
+        self.ch = {}
+        self.rejected = 0
+        self.last_hands = {}    # side key -> filtered hand (reused for body-only frames)
+        self.last_head = None
+
+    def reset(self):
+        self.__init__()
+
+    def _get(self, key):
+        c = self.ch.get(key)
+        if c is None:
+            c = self.ch[key] = _OEChannel()
+        return c
+
+    def vec(self, key, x, t, min_cutoff, beta):
+        c = self._get(key)
+        if c.y is None or c.t is None or t - c.t > self.RESET_GAP or t < c.t:
+            c.y, c.dx, c.t, c.pend, c.pend_n = list(x), 0.0, t, None, 0
+            return c.y
+        dt = t - c.t
+        if dt <= 0.0:
+            return c.y
+        jump = math.sqrt(sum((a - b) ** 2 for a, b in zip(x, c.y)))
+        gate = self.POS_GATE_MIN + self.POS_MAX_SPEED * dt
+        if jump > gate:
+            if c.pend is not None and math.sqrt(sum((a - b) ** 2 for a, b in zip(x, c.pend))) < gate:
+                c.pend_n += 1
+            else:
+                c.pend_n = 1
+            c.pend = list(x)
+            if c.pend_n < self.GATE_FRAMES:
+                self.rejected += 1
+                c.t = t
+                return c.y
+        c.pend, c.pend_n = None, 0
+        c.dx += _oe_alpha(self.D_CUTOFF, dt) * (jump / dt - c.dx)
+        a = _oe_alpha(min_cutoff + beta * self.POS_SPEED_SCALE * c.dx, dt)
+        c.y = [b + a * (v - b) for v, b in zip(x, c.y)]
+        c.t = t
+        return c.y
+
+    def quat(self, key, x, t, min_cutoff, beta):
+        """x = [x, y, z, w]"""
+        c = self._get(key)
+        q = Quaternion((x[3], x[0], x[1], x[2]))
+        if c.y is None or c.t is None or t - c.t > self.RESET_GAP or t < c.t:
+            c.y, c.dx, c.t, c.pend, c.pend_n = q, 0.0, t, None, 0
+            return x
+        dt = t - c.t
+        if dt <= 0.0:
+            y = c.y
+            return [y.x, y.y, y.z, y.w]
+        if c.y.dot(q) < 0.0:
+            q.negate()
+        ang = c.y.rotation_difference(q).angle
+        if ang > math.pi:
+            ang = 2.0 * math.pi - ang
+        gate = self.ROT_GATE_MIN + self.ROT_MAX_SPEED * dt
+        if ang > gate:
+            if c.pend is not None:
+                d = c.pend.rotation_difference(q).angle
+                d = min(d, 2.0 * math.pi - d)
+            if c.pend is not None and d < gate:
+                c.pend_n += 1
+            else:
+                c.pend_n = 1
+            c.pend = q.copy()
+            if c.pend_n < self.GATE_FRAMES:
+                self.rejected += 1
+                c.t = t
+                y = c.y
+                return [y.x, y.y, y.z, y.w]
+        c.pend, c.pend_n = None, 0
+        c.dx += _oe_alpha(self.D_CUTOFF, dt) * (ang / dt - c.dx)
+        a = _oe_alpha(min_cutoff + beta * c.dx, dt)
+        c.y = c.y.slerp(q, a)
+        c.t = t
+        y = c.y
+        return [y.x, y.y, y.z, y.w]
+
+    def process(self, frame, min_cutoff, beta):
+        """Filtered copy of a frame (same structure). Invalid joints are passed through untouched."""
+        t = float(frame.get("time", 0)) / 1000.0
+        out = dict(frame)
+        if frame.get("_body_only"):
+            # hands/head did not change: reuse the filtered ones (not the raw copy in the frame)
+            if self.last_head is not None:
+                out["head"] = self.last_head
+            for side, h in self.last_hands.items():
+                if side in out:
+                    out[side] = h
+        else:
+            head = frame.get("head")
+            if head and "pos" in head:
+                out["head"] = self.last_head = {
+                    "pos": self.vec(("head", "p"), head["pos"], t, min_cutoff, beta),
+                    "rot": self.quat(("head", "r"), head["rot"], t, min_cutoff, beta)}
+            for side in ("left", "right"):
+                hand = frame.get(side)
+                if not hand:
+                    self.last_hands.pop(side, None)
+                    continue
+                nh = dict(hand)
+                w = hand.get("wrist")
+                if w:
+                    nh["wrist"] = {"pos": self.vec((side, "wp"), w["pos"], t, min_cutoff, beta),
+                                   "rot": self.quat((side, "wr"), w["rot"], t, min_cutoff, beta)}
+                chains = {}
+                for finger, chain in (hand.get("chains") or {}).items():
+                    nc = []
+                    for e in chain:
+                        if e.get("valid", True) and "rot" in e:
+                            e = dict(e)
+                            n = e.get("name", "")
+                            e["rot"] = self.quat((side, n, "r"), e["rot"], t, min_cutoff, beta)
+                            if "pos" in e:
+                                e["pos"] = self.vec((side, n, "p"), e["pos"], t, min_cutoff, beta)
+                        nc.append(e)
+                    chains[finger] = nc
+                nh["chains"] = chains
+                out[side] = self.last_hands[side] = nh
+        body = frame.get("body")
+        if body and body.get("joints"):
+            tb = float(body.get("_time", frame.get("time", 0))) / 1000.0
+            valid = int(body.get("valid", 0))
+            nb = dict(body)
+            js = []
+            for i, j in enumerate(body["joints"]):
+                if (valid >> i) & 1:
+                    j = dict(j)
+                    n = j.get("name", str(i))
+                    j["rot"] = self.quat(("body", n, "r"), j["rot"], tb, min_cutoff, beta)
+                    j["pos"] = self.vec(("body", n, "p"), j["pos"], tb, min_cutoff, beta)
+                js.append(j)
+            nb["joints"] = js
+            out["body"] = nb
+        return out
+
+
+_live_filter = LiveFilter()
+
+
+def _median(v):
+    s = sorted(v)
+    n = len(s)
+    return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+
+HAMPEL_K = 3.0              # outlier = farther than K * robust sigma from the window median
+HAMPEL_WINDOW_SEC = 0.06    # half window (s): glitches up to ~half of it long are removed
+HAMPEL_FLOOR = {"rotation_quaternion": 0.03, "rotation_euler": 0.05, "location": 0.01}
+
+
+def _hampel_group(out, c0, n, half, floor):
+    """Hampel filter on n channels out[c0..c0+n) treated as one vector per frame (a quaternion,
+    a location). Frames farther from the window median than max(K * 1.4826 * MAD, floor) are
+    replaced by the median. Returns the number of replaced frames."""
+    cols = [out[c0 + j] for j in range(n)]
+    N = len(cols[0])
+    if N < 3 or all(max(c) - min(c) <= floor * 0.5 for c in cols):
+        return 0
+    new = [list(c) for c in cols]
+    fixed = 0
+    for i in range(N):
+        a, b = max(0, i - half), min(N, i + half + 1)
+        med = [_median(c[a:b]) for c in cols]
+        d = [math.sqrt(sum((cols[j][m] - med[j]) ** 2 for j in range(n))) for m in range(a, b)]
+        di = d[i - a]
+        if di > max(HAMPEL_K * 1.4826 * _median(d), floor):
+            for j in range(n):
+                new[j][i] = med[j]
+            fixed += 1
+    for j in range(n):
+        out[c0 + j] = new[j]
+    return fixed
 
 
 # ----------------------------------------------------------------- recording (takes)
@@ -1588,9 +1809,30 @@ def bake_take(path, scene, smooth_body=0.0, smooth_fingers=0.0, set_range=True, 
                 rows[i][col:col + 3] = list(e)
         col += len(ch)
 
+    # spike removal (Hampel) on the raw samples, before resampling and smoothing: here a glitch is
+    # 1-3 samples at full size; after interpolation / a low-pass it would be smeared over frames
+    times = [s for s, _f in samples]
+    despiked = 0
+    if getattr(scene, "quest_bake_despike", True) and len(rows) > 4:
+        rate = (len(times) - 1) / max(times[-1] - times[0], 1e-6)
+        half = max(2, int(round(HAMPEL_WINDOW_SEC * rate)))
+        cols = [list(c) for c in zip(*rows)]
+        col = 0
+        for sp in specs:
+            ch = _spec_channels(*sp)
+            i = 0
+            while i < len(ch):
+                dp = ch[i][0]
+                n = 1
+                while i + n < len(ch) and ch[i + n][0] == dp:
+                    n += 1
+                despiked += _hampel_group(cols, col + i, n, half, HAMPEL_FLOOR.get(dp.rsplit(".", 1)[-1], 0.01))
+                i += n
+            col += len(ch)
+        rows = [list(r) for r in zip(*cols)]
+
     # resample to the scene frame rate
     fps = scene.render.fps / (scene.render.fps_base or 1.0)
-    times = [s for s, _f in samples]
     total = times[-1]
     nframes = int(total * fps) + 1
     out = [[0.0] * nframes for _ in range(nch)]
@@ -1673,7 +1915,7 @@ def bake_take(path, scene, smooth_body=0.0, smooth_fingers=0.0, set_range=True, 
     if progress:
         progress(1.0)
     msg = (f"{name}: {len(samples)} samples, {total:.1f} s -> {nframes} frames @ {fps:g} fps, "
-           f"{keyed} curves on {len(objs)} object(s)")
+           f"{keyed} curves on {len(objs)} object(s)" + (f", {despiked} spikes removed" if despiked else ""))
     print(f"[QuestReceiver] Baked {msg}")
     return msg
 
@@ -2091,6 +2333,7 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
         r = box.row(align=True)
         r.prop(context.scene, "quest_smooth_body")
         r.prop(context.scene, "quest_smooth_fingers")
+        box.prop(context.scene, "quest_bake_despike")
         if st.get("last_bake"):
             box.label(text=st["last_bake"], icon='ACTION')
         takes = list_takes(4)
@@ -2115,6 +2358,12 @@ class QUESTHANDS_PT_panel(bpy.types.Panel):
                 col.label(text=f"Body: {bc.kind}, {len(bc.bone)} bones, head gap {bc.head_gap * 100:.1f} cm",
                           icon='BONE_DATA')
         col.operator(QUESTHANDS_OT_prepare_mixamo.bl_idname, icon='ARMATURE_DATA')
+        fbox = layout.box()
+        fbox.prop(sc, "quest_live_filter")
+        r = fbox.row(align=True)
+        r.enabled = sc.quest_live_filter
+        r.prop(sc, "quest_live_min_cutoff")
+        r.prop(sc, "quest_live_beta")
         layout.prop(sc, "quest_rig_mode", expand=True)
         layout.label(text="Bone length:")
         layout.prop(sc, "quest_joint_positions", expand=True)
@@ -2226,6 +2475,21 @@ def _register_props():
     S.quest_smooth_fingers = bpy.props.FloatProperty(
         name="Fingers", default=0.0, min=0.0, max=15.0,
         description="Bake: low-pass cutoff in Hz for finger bones (0 = raw). Try 8-10")
+    S.quest_bake_despike = bpy.props.BoolProperty(
+        name="Remove spikes", default=True,
+        description="Bake: Hampel filter - single-frame tracking glitches (a joint jumping away and back) are "
+                    "replaced by the median of the neighbouring frames before smoothing; real moves stay")
+    S.quest_live_filter = bpy.props.BoolProperty(
+        name="Live filter", default=True,
+        description="Live preview only (takes are recorded raw): holds back tracking spikes and removes "
+                    "jitter with a One Euro filter")
+    S.quest_live_min_cutoff = bpy.props.FloatProperty(
+        name="Smoothing", default=1.5, min=0.1, max=20.0,
+        description="One Euro min cutoff (Hz) when holding still: lower = less jitter, more lag on slow moves")
+    S.quest_live_beta = bpy.props.FloatProperty(
+        name="Speed", default=4.0, min=0.0, max=20.0,
+        description="One Euro beta: how fast the filter opens up on quick moves. Higher = less lag on fast "
+                    "moves, a bit more jitter")
     S.quest_straighten_head = bpy.props.FloatProperty(
         name="Straighten head", default=1.0, min=0.0, max=1.0,
         description="Move the Head bone onto the end of the neck (rigs often have the head joint a few cm in "
@@ -2239,6 +2503,7 @@ def _unregister_props():
     for name in ("quest_right_hand", "quest_left_hand", "quest_head", "quest_body", "quest_rig_mode", "quest_joint_positions",
                  "quest_lost_hand", "quest_straighten_head",
                  "quest_bake_auto", "quest_smooth_body", "quest_smooth_fingers",
+                 "quest_bake_despike", "quest_live_filter", "quest_live_min_cutoff", "quest_live_beta",
                  "quest_head_origin", "quest_hands_origin", "quest_hands_relative_to_head"):
         if hasattr(bpy.types.Scene, name):
             delattr(bpy.types.Scene, name)
